@@ -66,7 +66,7 @@ These apply to Tasks 1–4 (each runs the full verification chain). State them o
 ### z9-compat.AC6: Dead `permitBookmarklet` line removed — Task 4 (final verification deferred to Phase 2)
 
 - **AC6.1 Success:** `git diff src/addon.ts` shows `permitBookmarklet = true;` removed from `AddItemEndpoint`; no other change in that class.
-- **AC6.2 (re-scoped per critical review I5):** Phase 1 can only confirm the removal does not break the *existing* suite (`1 passing`). **This is "suite intact," not "property unread"** — the in-process tests bypass the dispatch surface entirely. Full verification that the suite (now including the HTTP dispatch test, AC9) still passes is **deferred to Phase 2 Task — full-suite run**. The removal's safety reasoning is pinned to a Z9 source tag in Task 4 Step 1.
+- **AC6.2 (re-scoped per critical review I5):** Phase 1 can only confirm the removal does not break the _existing_ suite (`1 passing`). **This is "suite intact," not "property unread"** — the in-process tests bypass the dispatch surface entirely. Full verification that the suite (now including the HTTP dispatch test, AC9) still passes is **deferred to Phase 2 Task — full-suite run**. The removal's safety reasoning is pinned to a Z9 source tag in Task 4 Step 1.
 
 ### z9-compat.AC7: MIME-type typo fixed — Task 4
 
@@ -80,6 +80,7 @@ These apply to Tasks 1–4 (each runs the full verification chain). State them o
 Phase Type = infrastructure. No TDD; no new tests in this phase. Verification = operational success of the standing chain above. **Each of Tasks 1–4 ends in its own commit.**
 
 <!-- START_TASK_1 -->
+
 ### Task 1: Bump `zotero-types` → `^4.1.2` (commit 1)
 
 **Verifies:** AC5.1 (partial), AC5.2, AC5.5 (for this package)
@@ -97,9 +98,11 @@ Type-only, lowest blast radius — bumped first so any type fallout is isolated 
 ```
 git commit -m "bump zotero-types to ^4.1.2 for Zotero 9"
 ```
+
 <!-- END_TASK_1 -->
 
 <!-- START_TASK_2 -->
+
 ### Task 2: Bump `zotero-plugin-toolkit` → `^5.1.2` (commit 2)
 
 **Verifies:** AC5.1 (partial), AC5.2, AC5.5 (for this package)
@@ -117,9 +120,11 @@ Beta→stable transition — a semver carve-out (betas sometimes cut features th
 ```
 git commit -m "bump zotero-plugin-toolkit to ^5.1.2"
 ```
+
 <!-- END_TASK_2 -->
 
 <!-- START_TASK_3 -->
+
 ### Task 3: Bump `zotero-plugin-scaffold` → `^0.8.6` (commit 3)
 
 **Verifies:** AC5.1, AC5.2, AC5.5 (for this package)
@@ -137,9 +142,11 @@ Pre-1.0 (no semver API-stability guarantee in `0.x`); controls the test runner, 
 ```
 git commit -m "bump zotero-plugin-scaffold to ^0.8.6"
 ```
+
 <!-- END_TASK_3 -->
 
 <!-- START_TASK_4 -->
+
 ### Task 4: Manifest widen + dead-code removal + MIME fix (commit 4)
 
 **Verifies:** AC1.1, AC1.2, AC6.1, AC7.1
@@ -159,6 +166,7 @@ git commit -m "bump zotero-plugin-scaffold to ^0.8.6"
 ```
 git commit -m "widen manifest to Zotero 9; drop dead permitBookmarklet; fix MIME typo"
 ```
+
 <!-- END_TASK_4 -->
 
 ---
@@ -170,6 +178,7 @@ git commit -m "widen manifest to Zotero 9; drop dead permitBookmarklet; fix MIME
    ```
    git log --pretty=%s z9-compat ^main
    ```
+
    Expected set (newest first): `widen manifest to Zotero 9; drop dead permitBookmarklet; fix MIME typo`, `bump zotero-plugin-scaffold to ^0.8.6`, `bump zotero-plugin-toolkit to ^5.1.2`, `bump zotero-types to ^4.1.2 for Zotero 9`, `format design plan with prettier`. (Findings-file or review-note commits, if any, are expected extras — the check is "these five subjects are present," not "exactly five commits.")
 
 2. `git diff main..HEAD` touches only: `package.json`, `package-lock.json`, `addon/manifest.json`, `src/addon.ts` (and optionally `typings/global.d.ts`), plus the design/plan docs already on the branch.

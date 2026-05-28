@@ -10,19 +10,19 @@ Not applicable — this is a plan review, not a code diff review. No test/lint c
 
 ## Plan Alignment — AC Coverage Map
 
-| Design DoD / AC | Phase | Task | Status |
-|---|---|---|---|
-| DoD 1 / AC1.1, AC1.2 | Phase 1 | Task 2 | Implemented |
-| DoD 1 / AC1.3 (manual UAT) | UAT file | AC1.3 entry | Satisfied — uat-requirements.md captures it |
-| DoD 2 / AC2.1, AC2.2 | Phase 1 | Task 5 | Implemented |
-| DoD 3 / AC3.1 | Phase 2 | Task 1 | Implemented |
-| DoD 3 / AC3.2, AC3.3 | Phase 2 | Task 2 | Implemented |
-| DoD 3 / AC3.4, AC3.5 | Phase 2 | Task 3 | Implemented |
-| DoD 4 / AC4.1, AC4.2, AC4.3 | Phase 2 | Task 4 | Implemented |
-| DoD 5 / AC5.1–AC5.5 | Phase 1 | Tasks 1, 5 | Implemented |
-| DoD 6 / AC6.1, AC6.2 | Phase 1 | Task 3 | Implemented (AC6.2 deferred to Phase 2 pass) |
-| DoD 7 / AC7.1, AC7.2 | Phase 1 | Task 4 (AC7.1); Phase 2 Task 1 (AC7.2) | Implemented |
-| DoD 8 / AC8.1–AC8.4 | Phase 3 | Tasks 1–3 | Implemented |
+| Design DoD / AC             | Phase    | Task                                   | Status                                       |
+| --------------------------- | -------- | -------------------------------------- | -------------------------------------------- |
+| DoD 1 / AC1.1, AC1.2        | Phase 1  | Task 2                                 | Implemented                                  |
+| DoD 1 / AC1.3 (manual UAT)  | UAT file | AC1.3 entry                            | Satisfied — uat-requirements.md captures it  |
+| DoD 2 / AC2.1, AC2.2        | Phase 1  | Task 5                                 | Implemented                                  |
+| DoD 3 / AC3.1               | Phase 2  | Task 1                                 | Implemented                                  |
+| DoD 3 / AC3.2, AC3.3        | Phase 2  | Task 2                                 | Implemented                                  |
+| DoD 3 / AC3.4, AC3.5        | Phase 2  | Task 3                                 | Implemented                                  |
+| DoD 4 / AC4.1, AC4.2, AC4.3 | Phase 2  | Task 4                                 | Implemented                                  |
+| DoD 5 / AC5.1–AC5.5         | Phase 1  | Tasks 1, 5                             | Implemented                                  |
+| DoD 6 / AC6.1, AC6.2        | Phase 1  | Task 3                                 | Implemented (AC6.2 deferred to Phase 2 pass) |
+| DoD 7 / AC7.1, AC7.2        | Phase 1  | Task 4 (AC7.1); Phase 2 Task 1 (AC7.2) | Implemented                                  |
+| DoD 8 / AC8.1–AC8.4         | Phase 3  | Tasks 1–3                              | Implemented                                  |
 
 All 8 DoD items and all AC sub-items (AC1–AC8 with subitems) are covered. AC1.3 is routed to uat-requirements.md, which captures the correct preconditions, the shattering condition, and the operator action. Coverage is complete.
 
@@ -36,7 +36,7 @@ Phase 2 "Depends on Phase 1" is explicitly stated at the top of phase_02.md: "th
 
 **I1 — AC6.2 cross-phase verification gap**
 
-- **Issue**: AC6.2 ("all tests in the suite still pass after the removal") appears in the Phase 1 AC coverage table but references AC3 and AC4, which are only created in Phase 2. Phase 1 Task 5 only verifies "1 passing" (the startup test). The plan text in phase_01.md Task 3 Step 2 says the `git diff` check should show "one removal line... before Task 4", but the AC6.2 success condition lists AC3 and AC4 satisfaction. An executor following phase_01.md literally will see AC6.2 marked as "covered" but the tests that would confirm AC6.2 (endpoint contract tests) won't exist until Phase 2. This is not a gap in what gets *verified eventually* — Phase 2 Task 5 verifies it — but the Phase 1 coverage table creates a false impression that AC6.2 is fully satisfied by Phase 1 alone.
+- **Issue**: AC6.2 ("all tests in the suite still pass after the removal") appears in the Phase 1 AC coverage table but references AC3 and AC4, which are only created in Phase 2. Phase 1 Task 5 only verifies "1 passing" (the startup test). The plan text in phase*01.md Task 3 Step 2 says the `git diff` check should show "one removal line... before Task 4", but the AC6.2 success condition lists AC3 and AC4 satisfaction. An executor following phase_01.md literally will see AC6.2 marked as "covered" but the tests that would confirm AC6.2 (endpoint contract tests) won't exist until Phase 2. This is not a gap in what gets \_verified eventually* — Phase 2 Task 5 verifies it — but the Phase 1 coverage table creates a false impression that AC6.2 is fully satisfied by Phase 1 alone.
 - **Location**: phase_01.md, Acceptance Criteria Coverage section (AC6.2 row) and phase_01.md "Done When" item 3.
 - **Fix**: Annotate AC6.2 in the Phase 1 coverage table: "(final verification deferred to Phase 2 Task 5 — the full suite must pass with all tests after Phase 2)". The Phase 1 Done When could note: "AC6.2 partial — startup test passes; contract test verification deferred to Phase 2."
 
@@ -111,13 +111,13 @@ The implementation plan covers all design requirements completely. No Critical g
 
 ### Prior Findings Verification
 
-| ID | Description | Status | Evidence |
-|---|---|---|---|
-| I1 | AC6.2 cross-phase signal — Phase 1 coverage table and Done When item | Resolved | phase_01.md AC6.2 row (lines 45-46) and Done When item 3 (line 308) both carry explicit deferral language pointing to Phase 2 Task 5 as the real falsification gate. |
-| I2 | Smoke test cleanup API — `getAsync` vs `get` (sync) vs batch erase | Resolved | phase_02.md Task 4 notes (lines 218-219) now name `Zotero.Items.get(id)` (synchronous) as the conventional path, `getAsync` as the cache-miss variant, and batch `Zotero.Items.erase` as the terseness alternative. The code snippet still shows `getAsync` but the prose instructs the implementor to verify against `zotero-types@4.1.2` and prefer the synchronous form. This satisfies the finding's requested guidance level. |
-| m1 | Pre-flight `mkdir -p` unconditional | Resolved | phase_01.md Task 5 pre-flight block (lines 194-202) now reads "always run; idempotent" and drops the conditional framing. Rationale for unconditional execution is present. |
-| m2 | Phase 3 phantom "DR3.1" / "DR3.2" citations | Resolved | phase_03.md Task 1 and Task 2 no longer cite DR3.1 or DR3.2. Both replaced with accurate inline rationale. The remaining "design AC8.2" reference in Task 2 is a real AC item — not a phantom citation. |
-| m3 | Trailing space in Task 3 regex as load-bearing | Resolved | phase_02.md Task 3 (lines 141-143) now contains an explicit bolded note: "The trailing space inside `Internal Server Error: ` in the regex alternation is intentional and load-bearing." with a precise explanation. |
+| ID  | Description                                                          | Status   | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --- | -------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I1  | AC6.2 cross-phase signal — Phase 1 coverage table and Done When item | Resolved | phase_01.md AC6.2 row (lines 45-46) and Done When item 3 (line 308) both carry explicit deferral language pointing to Phase 2 Task 5 as the real falsification gate.                                                                                                                                                                                                                                                               |
+| I2  | Smoke test cleanup API — `getAsync` vs `get` (sync) vs batch erase   | Resolved | phase_02.md Task 4 notes (lines 218-219) now name `Zotero.Items.get(id)` (synchronous) as the conventional path, `getAsync` as the cache-miss variant, and batch `Zotero.Items.erase` as the terseness alternative. The code snippet still shows `getAsync` but the prose instructs the implementor to verify against `zotero-types@4.1.2` and prefer the synchronous form. This satisfies the finding's requested guidance level. |
+| m1  | Pre-flight `mkdir -p` unconditional                                  | Resolved | phase_01.md Task 5 pre-flight block (lines 194-202) now reads "always run; idempotent" and drops the conditional framing. Rationale for unconditional execution is present.                                                                                                                                                                                                                                                        |
+| m2  | Phase 3 phantom "DR3.1" / "DR3.2" citations                          | Resolved | phase_03.md Task 1 and Task 2 no longer cite DR3.1 or DR3.2. Both replaced with accurate inline rationale. The remaining "design AC8.2" reference in Task 2 is a real AC item — not a phantom citation.                                                                                                                                                                                                                            |
+| m3  | Trailing space in Task 3 regex as load-bearing                       | Resolved | phase_02.md Task 3 (lines 141-143) now contains an explicit bolded note: "The trailing space inside `Internal Server Error: ` in the regex alternation is intentional and load-bearing." with a precise explanation.                                                                                                                                                                                                               |
 
 ### New Issues
 
@@ -125,7 +125,7 @@ The implementation plan covers all design requirements completely. No Critical g
 
 - **Issue**: The "Testing" sub-section (phase_02.md line 152) writes the AC3.4 body match condition as `^(No Collection selected\.|Internal Server Error: )/` — the opening `/` is absent, leaving a dangling `/` at the end. The correct form is `/^(No Collection selected\.|Internal Server Error: )/`. This is prose-only; the Implementation block's code (line 141) is correct. An executor writing the test from the code block will not be misled, but the Testing prose is mildly confusing. This defect predates the prior review cycle and was partially noted under original m2.
 - **Location**: phase_02.md, Task 3, Testing sub-section, line 152.
-- **Fix**: Change `body matches \`^(No Collection selected\.|Internal Server Error: )/\`` to `body matches \`/^(No Collection selected\.|Internal Server Error: )/\`` (add the opening `/`).
+- **Fix**: Change `body matches \`^(No Collection selected\.|Internal Server Error: )/\``to`body matches \`/^(No Collection selected\.|Internal Server Error: )/\``(add the opening`/`).
 
 ### Re-review Assessment
 
