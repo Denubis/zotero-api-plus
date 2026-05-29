@@ -20,24 +20,25 @@
 
 These apply to Tasks 1–4 (each runs the full verification chain). State them once; obey them each time.
 
-- **Zotero must be closed.** Scaffold launches the local Z9 binary against the dev profile; a running user-session Zotero conflicts over the SQLite lock and the run fails.
-- **tmpfs dev directories must exist (always run; idempotent).** `/tmp` is tmpfs on this host, so these vanish on reboot. Run unconditionally — a missing directory makes scaffold fail opaquely before mocha reports anything:
+_(Phase 1 is complete; the preconditions below were corrected after execution — the original "close Zotero" / tmpfs / exit-0 assumptions were wrong.)_
 
-  ```
-  mkdir -p /tmp/zotero-api-plus-dev-profile /tmp/zotero-api-plus-dev-data
-  ```
-
-- **The verification chain** (the same four commands after each change):
+- **Zotero does NOT need to be closed.** `npm run test` launches an isolated `no-remote` Zotero on its own profile (`.scaffold/test/profile`) and local-API port 23124 — it coexists with a normal session (port 23119). The SQLite-lock concern does not apply to the test path.
+- **No tmpfs precondition for testing.** Scaffold's test runner uses `.scaffold/test/{profile,data}`, not the `/tmp/...` paths from `.env` (those are for `zotero-plugin serve`). No `mkdir` needed before `npm run test`.
+- **The verification chain** after each change:
 
   ```
   npm install            # only after a package.json edit
-  npm run lint:check
-  npm run build
-  npx tsc --noEmit
-  npm run test
+  npm run lint:check     # exits 0
+  npm run build          # exits 0 (runs tsc --noEmit)
+  npx tsc --noEmit       # exits 0
+  # Test: scaffold does NOT self-exit, so run under timeout (exit 124 expected),
+  # read success from the log line, and never pipe through tail.
+  rm -rf .scaffold/test && timeout -k 10 120 npm run test > /tmp/zt-test.log 2>&1
+  grep -E "Test run completed|failing" /tmp/zt-test.log
+  for pid in $(pgrep -a zotero | grep scaffold/test | awk '{print $1}'); do kill "$pid"; done
   ```
 
-  Expected at the end of Phase 1: `npm run test` reports `1 passing`, `0 pending`, `0 failing` (only `test/startup.test.ts` exists yet; Phase 2 adds the rest).
+  Expected at the end of Phase 1: the log shows `Test run completed - 1 passed` with `0 failing` (only `test/startup.test.ts` exists yet; Phase 2 adds the rest). `npm` exit `124` under `timeout` is expected, not a failure.
 
 ---
 

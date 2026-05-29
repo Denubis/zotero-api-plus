@@ -2,7 +2,7 @@
 
 **Goal:** Lock down the endpoint behaviour observed on Zotero 9 across three levels — a harness **preflight probe** (positive controls), **in-process contract tests** (one per endpoint), and **one HTTP dispatch test** against the real `Zotero.Server` routing — plus one real-network arXiv smoke test.
 
-**Architecture (revised per critical review):** Most files follow the existing `test/startup.test.ts` pattern (`import { assert } from "chai"`, `describe`/`it`, instantiate via `new Zotero.Server.LocalAPI.<ClassName>()`, await `.run(...)`, assert on the `[status, mime, body]` tuple). **Two departures from the original Phase 2:** (1) a preflight probe turns the scaffold/mocha assumptions (`waitForPlugin` populated the namespace; the runner honours `this.timeout`) into tested controls rather than background facts (HA1/HA2 → I3); (2) one HTTP dispatch test drives `Zotero.Server`'s real routing over `127.0.0.1:23119`, covering the surface the in-process `.run()` calls bypass (DR2, revised). Per-test timeouts are set **inside** each long `it` callback (not at `describe` level), removing the propagation question I3/HA2 raised.
+**Architecture (revised per critical review):** Most files follow the existing `test/startup.test.ts` pattern (`import { assert } from "chai"`, `describe`/`it`, instantiate via `new Zotero.Server.LocalAPI.<ClassName>()`, await `.run(...)`, assert on the `[status, mime, body]` tuple). **Two departures from the original Phase 2:** (1) a preflight probe turns the scaffold/mocha assumptions (`waitForPlugin` populated the namespace; the runner honours `this.timeout`) into tested controls rather than background facts (HA1/HA2 → I3); (2) one HTTP dispatch test drives `Zotero.Server`'s real routing over `127.0.0.1:23124`, covering the surface the in-process `.run()` calls bypass (DR2, revised). Per-test timeouts are set **inside** each long `it` callback (not at `describe` level), removing the propagation question I3/HA2 raised.
 
 **Tech Stack:** Mocha 11.7.5, Chai 6.2.1 (assert style), `zotero-plugin test` (scaffold ≥ 0.8.6) as runner, `Zotero.HTTP.request` as the in-process HTTP client for the dispatch test.
 
@@ -12,7 +12,7 @@
 
 **Phase Type:** functionality
 
-**Depends on Phase 1:** the `endpoint-plus` and HTTP-GET assertions target `"text/plain"`, which only holds after Phase 1's MIME fix. The HTTP test also depends on the `0.8.6` scaffold bump (Phase 1 Task 3) for whatever pref-injection it offers.
+**Depends on Phase 1:** the `endpoint-plus` and HTTP-GET assertions target `"text/plain"`, which only holds after Phase 1's MIME fix. Scaffold's `0.8.6` test profile **already enables** the local API on **port 23124** (confirmed during Phase 1 execution — `prefs.js` sets `extensions.zotero.httpServer.localAPI.enabled = true` and `extensions.zotero.httpServer.port = 23124`), so the HTTP test needs no enablement code.
 
 ---
 
@@ -23,9 +23,9 @@
 - **z9-compat.AC9.0–AC9.3** (Tasks 0 + 5): HTTP dispatch, network-free.
 - **z9-compat.AC4.1–AC4.3** (Task 6): arXiv smoke (network-dependent; DR5 triage applies).
 - **z9-compat.AC6.2 finalised** (Task 7): the full suite still passes after Phase 1's `permitBookmarklet` removal — with the I5 caveat that "suite intact" ≠ "property unread."
-- **z9-compat.AC-Aggregate** (Task 7): `npm run test` exits 0 **and** `0 pending` **and** `0 failing` (I4).
+- **z9-compat.AC-Aggregate** (Task 7): the test log shows `N passed`, `0 pending`, `0 failing` (I4).
 
-Standing preconditions (Zotero closed; tmpfs dirs created unconditionally) are identical to Phase 1 and apply to every `npm run test` here.
+**Test-run method (every `npm run test` here):** scaffold does NOT self-exit after tests (confirmed in Phase 1, even on 0.8.6), so run under `timeout` and read the result from the log line `Test run completed - N passed` — **`npm` exit code is `124` (timeout), which is expected, not a failure.** Never pipe through `tail` (it flushes only at EOF, which never comes). (No tmpfs precondition — the test runner uses `.scaffold/test/{profile,data}`, not the `/tmp` paths from `.env`.) **Zotero does NOT need to be closed** — scaffold launches an isolated `no-remote` instance on its own profile and port 23124, coexisting with a normal session (port 23119). Clean up any straggler with `for pid in $(pgrep -a zotero | grep scaffold/test | awk '{print $1}'); do kill "$pid"; done` (kills only test instances).
 
 ---
 
@@ -33,22 +33,15 @@ Standing preconditions (Zotero closed; tmpfs dirs created unconditionally) are i
 
 <!-- START_TASK_0 -->
 
-### Task 0: HTTP-server enablement spike — gates the HTTP dispatch test (AC9.0)
+### Task 0: Confirm the local API server is reachable (AC9.0)
 
-The HTTP dispatch test (Task 5) needs Zotero's local API server running in the scaffold dev profile (`extensions.zotero.httpServer.enabled`). The current `zotero-plugin.config.ts` shows no pref injection (`test: { waitForPlugin: ... }` only), so this must be established before Task 5 is viable.
+**Resolved during Phase 1 execution:** scaffold's test profile **already enables** the local API — its `prefs.js` sets `extensions.zotero.httpServer.localAPI.enabled = true` and `extensions.zotero.httpServer.port = 23124`. The original "enablement spike" is therefore moot; no pref-setting code is needed.
 
-**Investigate, in order, and stop at the first that works:**
+This task is now just a **reachability confirmation** for the HTTP test (Task 5): after scaffold prints `Server Ready!`, a `GET http://127.0.0.1:23124/api/plus` should connect. If Task 5 cannot connect, add a short readiness poll in a `before()` hook (condition-based wait on the GET — not a fixed sleep); do **not** add pref-setting code, the pref is already on.
 
-1. **Scaffold config option.** Re-read the `0.8.6` changelog note from Phase 1 Task 3 and the scaffold `defineConfig` types: is there a `test`-block option for profile prefs or for starting the local API server? If so, set `extensions.zotero.httpServer.enabled = true` there.
-2. **Programmatic enable in test setup.** In a `before()` hook (or the preflight file), `Zotero.Prefs.set("httpServer.enabled", true)` then (re-)initialise the server (candidate: `Zotero.Server.init()` — confirm the method name against the running Zotero). Probe readiness by polling a `GET /api/plus` until it connects (condition-based wait, not a fixed sleep).
-3. **Pre-seed the tmpfs profile.** Write the pref into `/tmp/zotero-api-plus-dev-profile/prefs.js` before scaffold launches. Fragile (profile is recreated/locked by scaffold) — last resort.
+**Fallback only (not the expected path):** if the server proves genuinely unreachable in-harness (not observed in Phase 1), re-scope AC9 — drop the two HTTP `it`s, set the target to **8 passing**, and surface to the user. Unlikely.
 
-**Outcome (record it):**
-
-- **"Mechanism X works"** → proceed to Task 5 with that mechanism documented.
-- **"No in-harness mechanism found"** → **re-scope AC9**: drop the two HTTP `it`s, record the reason here and in the design's DR2 reevaluation note, and set the Phase 2 target count to **8 passing**. Do not silently skip. Surface the re-scope to the user before finalising the phase.
-
-**This task writes no test assertions** — it produces a documented mechanism (or a documented re-scope) and, if mechanism 2, a `before()`/setup snippet reused by Task 5.
+**This task writes no standalone assertions** — reachability is exercised by Task 5's GET case itself.
 
 <!-- END_TASK_0 -->
 
@@ -128,7 +121,7 @@ One `it`: `const result = await new Zotero.Server.LocalAPI.GetSelectedCollection
 
 ### Task 5: `test/http-dispatch.test.ts` — real `Zotero.Server` routing, network-free (AC9.1, AC9.2)
 
-**Gated on Task 0.** If Task 0 found no enablement mechanism, this file is not created and the phase target is `8 passing` — see Task 0's re-scope path.
+**Server is enabled by scaffold** (local API on port 23124, per Task 0) — these cases target that port. If the GET cannot connect, add Task 0's readiness poll in a `before()`; only in the unlikely event the server is unreachable does AC9 re-scope (target `8 passing`).
 
 **Files:** Create `test/http-dispatch.test.ts`. If Task 0 produced a setup snippet (mechanism 2), include it in a `before()` here.
 
@@ -137,10 +130,10 @@ Drive the live local server with `Zotero.HTTP.request` (the Zotero-native in-pro
 ```
 import { assert } from "chai";
 
-describe("HTTP dispatch via Zotero.Server (127.0.0.1:23119)", function () {
+describe("HTTP dispatch via Zotero.Server (127.0.0.1:23124)", function () {
   it("GET /api/plus dispatches to the Plus endpoint", async function () {
     this.timeout(15000);
-    const res = await Zotero.HTTP.request("GET", "http://127.0.0.1:23119/api/plus");
+    const res = await Zotero.HTTP.request("GET", "http://127.0.0.1:23124/api/plus");
     assert.strictEqual(res.status, 200);
     assert.match(res.getResponseHeader("Content-Type") || "", /^text\/plain/);
     assert.strictEqual(res.responseText, "Zotero Local API Plus is running.");
@@ -150,7 +143,7 @@ describe("HTTP dispatch via Zotero.Server (127.0.0.1:23119)", function () {
     this.timeout(15000);
     const res = await Zotero.HTTP.request(
       "POST",
-      "http://127.0.0.1:23119/api/plus/add-item-by-id",
+      "http://127.0.0.1:23124/api/plus/add-item-by-id",
       { body: "{}", headers: { "Content-Type": "application/json" }, successCodes: false },
     );
     assert.strictEqual(res.status, 400);
@@ -233,7 +226,7 @@ All exit 0. If `tsc` flags the test files' Zotero API references (`Zotero.HTTP.r
 npm run test
 ```
 
-Expected (network up, HTTP server enabled): the spec output shows the preflight, four contract `it`s, two HTTP `it`s, and the smoke `it` as `✔`, and the run reports **`10 passing`** with **no `pending` line (or `0 pending`)** and **`0 failing`**, exit 0. If Task 0 re-scoped AC9: **`8 passing`**. A `pending`/skipped test, or a non-zero exit, fails this gate — a passing _count_ alone is not sufficient.
+Expected (network up): the spec output shows the preflight, four contract `it`s, two HTTP `it`s, and the smoke `it` as `✔`, and the log line reports **`10 passing`** with **no `pending` line (or `0 pending`)** and **`0 failing`**. (`npm` exits `124` under `timeout` — expected, since scaffold does not self-exit; read success from the log line, not the exit code.) If AC9 was re-scoped: **`8 passing`**. A `pending`/skipped test, or any `failing`, fails this gate — a passing _count_ alone is not sufficient.
 
 **Step 3 — AC6.2 finalisation.** With the full suite green, AC6.2 is finalised: the `permitBookmarklet` removal did not break the suite (including the HTTP dispatch test). Record the I5 caveat in the phase notes: this confirms suite integrity, not that the property is unread on Z9 (that rests on the Phase 1 source pin).
 
@@ -273,7 +266,7 @@ Expected to include the four Phase 1 subjects plus this Phase 2 subject.
 
 1. New files under `test/`: `preflight`, `endpoint-plus`, `endpoint-add-item`, `endpoint-selected-collection`, `smoke-add-item-by-doi`, and `http-dispatch` (unless AC9 was re-scoped, documented in Task 0).
 2. `npm run lint:check`, `npm run build`, `npx tsc --noEmit` all exit 0.
-3. `npm run test` exits 0 with **`0 pending`, `0 failing`**, and `10 passing` (network up, HTTP server enabled) or `8 passing` (AC9 re-scoped).
+3. `npm run test` log shows `10 passing` (network up) or `8 passing` (AC9 re-scoped) with **`0 pending`, `0 failing`** — run under `timeout`; `npm` exit `124` is expected (scaffold does not self-exit), success is the log line.
 4. One commit on `z9-compat`: `add preflight, contract, HTTP dispatch, and arXiv smoke tests`.
 5. AC6.2 finalised with its I5 caveat recorded; Task 0 outcome recorded.
 

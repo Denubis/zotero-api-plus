@@ -4,11 +4,13 @@ This file is the contract that `test-analyst` checks during execution. Every acc
 
 **Revised** after the critical peer review: Phase 1 now bumps dependencies one at a time (four commits), Phase 2 adds a preflight probe and an HTTP dispatch test, and the aggregate gate requires `0 pending`/`0 failing` (not just a passing count). Phase 2 task numbers below reflect the rewritten `phase_02.md`.
 
+**Exit-code caveat (confirmed in Phase 1 execution):** `npm run test` does NOT reflect pass/fail in its exit code — scaffold does not self-exit after tests, so the command is run under `timeout` and exits `124` even on success. **For every test-command row below, read pass/fail from the spec output, not the exit code:** success = `Test run completed - N passed` with `0 failing`; failure = a `✖` line or a non-zero `failing` count. Never pipe `npm run test` through `tail`. Zotero need not be closed (isolated test instance, port 23124).
+
 Test type vocabulary:
 
 - **unit** — pure logic, no Zotero context
 - **contract** — instantiate an endpoint class, call `.run()`, assert on the `[status, mime, body]` tuple in-process (no HTTP, no network)
-- **http-dispatch** — real HTTP request to `127.0.0.1:23119` exercising `Zotero.Server` routing (network-free for these cases)
+- **http-dispatch** — real HTTP request to `127.0.0.1:23124` (scaffold test-profile port) exercising `Zotero.Server` routing (network-free for these cases)
 - **preflight** — harness positive control (namespace populated; timeout honoured)
 - **integration** — exercises Zotero core APIs in-process
 - **e2e / smoke** — full path including network egress
@@ -39,10 +41,10 @@ Test type vocabulary:
 
 ## AC2: Existing startup test passes on Zotero 9
 
-| AC    | Type        | Command / file                          | Expected outcome                                                                                                               | Phase                                   |
-| ----- | ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- |
-| AC2.1 | integration | `npm run test` — `test/startup.test.ts` | `✔ should have plugin instance defined`; exit 0; `1 passing` after each Phase 1 commit, included in `10 passing` after Phase 2 | Phase 1 (every task) + Phase 2 (Task 7) |
-| AC2.2 | integration | `npm run test` (failure mode)           | startup absent/`✖` → exits non-zero; flagged as regression                                                                     | Phase 1 + Phase 2                       |
+| AC    | Type        | Command / file                          | Expected outcome                                                                                                                                              | Phase                                   |
+| ----- | ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| AC2.1 | integration | `npm run test` — `test/startup.test.ts` | log shows `✔ should have plugin instance defined`; `1 passing` after each Phase 1 commit, included in `10 passing` after Phase 2 (see exit-code caveat above) | Phase 1 (every task) + Phase 2 (Task 7) |
+| AC2.2 | integration | `npm run test` (failure mode)           | startup absent/`✖` → exits non-zero; flagged as regression                                                                                                    | Phase 1 + Phase 2                       |
 
 ---
 
@@ -60,12 +62,12 @@ Test type vocabulary:
 
 ## AC9: HTTP dispatch test exercises `Zotero.Server` routing (NEW — DR2 revised)
 
-| AC    | Type           | Command / file                                   | Expected outcome                                                                                                          | Phase            |
-| ----- | -------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| AC9.0 | (precondition) | Task 0 spike outcome recorded                    | HTTP server enablable in dev profile, mechanism documented — OR formally re-scoped (HTTP `it`s dropped, target count → 8) | Phase 2 (Task 0) |
-| AC9.1 | http-dispatch  | `test/http-dispatch.test.ts` → "GET /api/plus"   | `res.status===200`; `Content-Type` matches `^text/plain`; body `Zotero Local API Plus is running.`; network-free          | Phase 2 (Task 5) |
-| AC9.2 | http-dispatch  | `test/http-dispatch.test.ts` → "empty-body POST" | `res.status===400`; body `Error: No identifier provided`; returns before any translator call (network-free)               | Phase 2 (Task 5) |
-| AC9.3 | http-dispatch  | `npm run test` (failure mode)                    | either HTTP `it` `✖` → exits non-zero; with AC3 passing, localises fault to dispatch/transport, not endpoint logic        | Phase 2 (Task 7) |
+| AC    | Type           | Command / file                                   | Expected outcome                                                                                                                                                                                 | Phase            |
+| ----- | -------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| AC9.0 | (precondition) | Task 0 reachability confirmation                 | Scaffold's test profile already enables the local API on port 23124 (confirmed Phase 1); Task 0 just confirms reachability. Re-scope (drop HTTP `it`s, target 8) only if unreachable — unlikely. | Phase 2 (Task 0) |
+| AC9.1 | http-dispatch  | `test/http-dispatch.test.ts` → "GET /api/plus"   | `res.status===200`; `Content-Type` matches `^text/plain`; body `Zotero Local API Plus is running.`; network-free                                                                                 | Phase 2 (Task 5) |
+| AC9.2 | http-dispatch  | `test/http-dispatch.test.ts` → "empty-body POST" | `res.status===400`; body `Error: No identifier provided`; returns before any translator call (network-free)                                                                                      | Phase 2 (Task 5) |
+| AC9.3 | http-dispatch  | `npm run test` (failure mode)                    | either HTTP `it` `✖` → exits non-zero; with AC3 passing, localises fault to dispatch/transport, not endpoint logic                                                                               | Phase 2 (Task 7) |
 
 ---
 
@@ -123,9 +125,9 @@ Test type vocabulary:
 
 ## AC-Aggregate: suite gate (NEW — critical review I4)
 
-| AC           | Type        | Command / file | Expected outcome                                                                                                                                                                                                                 | Phase            |
-| ------------ | ----------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| AC-Aggregate | integration | `npm run test` | exits `0` **and** reports `0 pending` **and** `0 failing`. Target `10 passing` (network up, HTTP server enabled) or `8 passing` (AC9 re-scoped). A passing _count_ alone does not gate — a `pending`/skipped test fails the gate | Phase 2 (Task 7) |
+| AC           | Type        | Command / file                   | Expected outcome                                                                                                                                                                                                                                                         | Phase            |
+| ------------ | ----------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| AC-Aggregate | integration | `npm run test` (under `timeout`) | log shows `0 pending` **and** `0 failing`. Target `10 passing` (network up) or `8 passing` (AC9 re-scoped). Read from the log, not the exit code (`124` is expected — see caveat above). A passing _count_ alone does not gate — a `pending`/skipped test fails the gate | Phase 2 (Task 7) |
 
 ---
 
