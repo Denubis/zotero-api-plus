@@ -34,7 +34,23 @@ Versions in range: 0.8.3, 0.8.4, 0.8.5, 0.8.6.
 
 Checked 2026-05-28 against `zotero/zotero` (latest Z9 tag **9.0.4**; search run on the default branch, which is ahead of the 9.0.x line). A repo-wide code search for `permitBookmarklet` returns occurrences in **only** the connector/integration server files — `chrome/content/zotero/xpcom/server/server_connector.js`, `server_connectorIntegration.js`, `server_integration.js` — all as `permitBookmarklet: true` property declarations on connector endpoints. It appears in **no** LocalAPI file. Our `/api/plus*` endpoints register on `Zotero.Server.Endpoints` and are dispatched via the LocalAPI path, not the connector/bookmarklet path, so the property is never consulted for them.
 
-**Confidence:** the negative is well-supported (the property is structurally connector-only; absent from LocalAPI). The exact consumer line (`endpoint.permitBookmarklet` read in the connector request flow) could not be pinned via GitHub's tokenised code search (the `.permitBookmarklet` token returned nothing), so this is "structurally source-verified (connector-only), specific read-line not quoted" rather than a single file:line citation. This is sufficient for the removal: even if Z9's connector flow reads the property, our endpoints are not reached through that flow. The HTTP dispatch test (AC9) provides the automated backstop on the LocalAPI dispatch surface.
+**Confidence:** the negative is well-supported (the property is structurally connector-only; absent from LocalAPI). The exact consumer line (`endpoint.permitBookmarklet` read in the connector request flow) could not be pinned via GitHub's tokenised code search (the `.permitBookmarklet` token returned nothing), so this is "structurally source-verified (connector-only), specific read-line not quoted" rather than a single file:line citation. This is sufficient for the removal: even if Z9's connector flow reads the property, our endpoints are not reached through that flow. (Note: the HTTP dispatch test that was to provide automated backstop on the LocalAPI dispatch surface was **re-scoped** during Phase 2 — see the AC9 finding below. Manual UAT curl on the normal install (Phase 3) carries the dispatch-surface coverage instead.)
+
+## AC9 re-scoped: in-process `Zotero.HTTP.request` cannot reach the self-loopback local API (Phase 2 finding)
+
+**Decision (2026-05-30):** the two automated HTTP dispatch `it`s (AC9.1 GET, AC9.2 POST) are **dropped**. Phase 2 target falls from 10 to **8 passing**. The plan's documented re-scope fallback is now active. The dispatch surface stays in scope via the manual UAT curl on the normal install (Phase 3 / uat-requirements AC1.3).
+
+**What was observed:**
+
+- During the initial Phase 2 test run with `test/http-dispatch.test.ts` present, both `it`s failed with `status: 0` (no response received) from `Zotero.HTTP.request` against `http://127.0.0.1:23124/api/plus*`.
+- An external `curl` to the same URL — issued from a shell while the scaffold-launched test Zotero was up — returned a clean `HTTP/1.0 200 OK` with the correct headers (`X-Zotero-Version: 9.0.3`, `Content-Type: text/plain`) and body. So the server was listening on 23124 and the plugin's endpoints were responding correctly.
+- The user's normal Zotero (port 23119) also has the listener on (`/connector/ping` returns 200) — the listener is not the issue on either side.
+
+**Likely cause:** Zotero's local API server enforces an Origin/Referer check intended to prevent CSRF from web pages. External `curl` has no `Origin` and is allowed; an in-process XHR from inside Zotero sends `Origin: chrome://...` which the server rejects pre-response (connection closed → `status: 0`). The check is server-side; not a client option that `Zotero.HTTP.request` can flip. `fetch()` from inside Zotero would send the same `Origin` and is expected to behave identically.
+
+**Why we did not pursue a workaround:** the available workarounds either don't help (`fetch()` same Origin), introduce harness brittleness (subprocess `curl` from the test, or `Components.classes`/`nsIChannel` lower-level networking), or rely on patching Zotero's own CORS rules. The manual UAT curl on the **normal** install already exercises the production dispatch path from outside the Zotero process — that's how real callers will use the API, and it's already a required UAT step.
+
+**Consequence for AC6.2 / I5:** the I5 hedge in the design plan already acknowledged that the in-process tests alone don't cover dispatch. The HTTP test was the closest _automated_ coverage of that surface. With it re-scoped, the automated suite only confirms endpoint method-body contracts; the dispatch-regression backstop is the operator's manual UAT, not automation.
 
 ## Lockfile side-effects (noted in Phase 1 code review)
 

@@ -33,15 +33,11 @@
 
 <!-- START_TASK_0 -->
 
-### Task 0: Confirm the local API server is reachable (AC9.0)
+### Task 0: AC9 re-scoped — outcome recorded (2026-05-30)
 
-**Resolved during Phase 1 execution:** scaffold's test profile **already enables** the local API — its `prefs.js` sets `extensions.zotero.httpServer.localAPI.enabled = true` and `extensions.zotero.httpServer.port = 23124`. The original "enablement spike" is therefore moot; no pref-setting code is needed.
+**Outcome: AC9 is re-scoped.** Phase 2 target is **8 passing**, not 10. Task 5 (the HTTP dispatch test) is NOT implemented in this branch. The dispatch-surface coverage falls back to the manual UAT curl on the normal install (uat-requirements AC1.3).
 
-This task is now just a **reachability confirmation** for the HTTP test (Task 5): after scaffold prints `Server Ready!`, a `GET http://127.0.0.1:23124/api/plus` should connect. If Task 5 cannot connect, add a short readiness poll in a `before()` hook (condition-based wait on the GET — not a fixed sleep); do **not** add pref-setting code, the pref is already on.
-
-**Fallback only (not the expected path):** if the server proves genuinely unreachable in-harness (not observed in Phase 1), re-scope AC9 — drop the two HTTP `it`s, set the target to **8 passing**, and surface to the user. Unlikely.
-
-**This task writes no standalone assertions** — reachability is exercised by Task 5's GET case itself.
+**Why:** scaffold's test profile does enable the local API on port 23124 (confirmed: external `curl` from a shell reached the test instance and returned a correct 200 with `Zotero Local API Plus is running.`). However, `Zotero.HTTP.request` from **inside** the Zotero process to its own self-loopback returns `status: 0` — the server rejects the in-process XHR pre-response (almost certainly due to the chrome:// `Origin` header sent by in-process JavaScript, which Zotero's CSRF check disallows). This is a server-side gate, not a client option. `fetch()` would send the same Origin and behave identically. The workarounds (subprocess curl, Components.classes/nsIChannel, patching Zotero's CORS) all add harness brittleness for what the operator's normal-install UAT already covers from the production path. See `changelog-notes.md` § "AC9 re-scoped" for the full finding.
 
 <!-- END_TASK_0 -->
 
@@ -119,9 +115,11 @@ One `it`: `const result = await new Zotero.Server.LocalAPI.GetSelectedCollection
 
 <!-- START_TASK_5 -->
 
-### Task 5: `test/http-dispatch.test.ts` — real `Zotero.Server` routing, network-free (AC9.1, AC9.2)
+### Task 5: `test/http-dispatch.test.ts` — **NOT IMPLEMENTED (AC9 re-scoped, 2026-05-30)**
 
-**Server is enabled by scaffold** (local API on port 23124, per Task 0) — these cases target that port. If the GET cannot connect, add Task 0's readiness poll in a `before()`; only in the unlikely event the server is unreachable does AC9 re-scope (target `8 passing`).
+**Per Task 0's outcome, this task is not implemented in this branch.** `test/http-dispatch.test.ts` does not exist. The two HTTP `it`s (AC9.1 GET, AC9.2 POST) were dropped after the in-process `Zotero.HTTP.request` against `127.0.0.1:23124` returned `status: 0` (server rejects the chrome:// Origin pre-response) while external `curl` to the same URL succeeded. See `changelog-notes.md` § "AC9 re-scoped" for the full finding.
+
+The remaining instructions in this section are preserved below for reference only; they were the intended implementation before re-scope. They do NOT apply to this branch.
 
 **Files:** Create `test/http-dispatch.test.ts`. If Task 0 produced a setup snippet (mechanism 2), include it in a `before()` here.
 
