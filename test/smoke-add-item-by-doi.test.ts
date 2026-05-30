@@ -34,8 +34,19 @@ describe("smoke /api/plus/add-item-by-id (arXiv DOI, network)", function () {
         if (item) await item.eraseTx();
       }
     } catch (cleanupErr: unknown) {
-      const msg =
-        cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      // Format defensively so object rejections don't log as `[object Object]`.
+      let msg: string;
+      if (cleanupErr instanceof Error) {
+        msg = cleanupErr.message;
+      } else if (typeof cleanupErr === "string") {
+        msg = cleanupErr;
+      } else {
+        try {
+          msg = JSON.stringify(cleanupErr);
+        } catch {
+          msg = String(cleanupErr);
+        }
+      }
       Zotero.debug("smoke cleanup failed: " + msg);
     }
   });

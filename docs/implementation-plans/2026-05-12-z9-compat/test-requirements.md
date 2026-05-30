@@ -4,6 +4,8 @@ This file is the contract that `test-analyst` checks during execution. Every acc
 
 **Revised** after the critical peer review: Phase 1 now bumps dependencies one at a time (four commits), Phase 2 adds a preflight probe and an HTTP dispatch test, and the aggregate gate requires `0 pending`/`0 failing` (not just a passing count). Phase 2 task numbers below reflect the rewritten `phase_02.md`.
 
+**AC9 re-scoped (2026-05-30):** the two automated HTTP dispatch `it`s are NOT implemented in this branch — in-process `Zotero.HTTP.request` to `127.0.0.1:23124` returns `status: 0` (server rejects the chrome:// Origin) while external `curl` works. Phase 2 target is **8 passing**, not 10. Dispatch-surface coverage moves to the UAT curl on the normal install (AC1.3). See design AC9 + `changelog-notes.md` § "AC9 re-scoped".
+
 **Exit-code caveat (confirmed in Phase 1 execution):** `npm run test` does NOT reflect pass/fail in its exit code — scaffold does not self-exit after tests, so the command is run under `timeout` and exits `124` even on success. **For every test-command row below, read pass/fail from the spec output, not the exit code:** success = `Test run completed - N passed` with `0 failing`; failure = a `✖` line or a non-zero `failing` count. Never pipe `npm run test` through `tail`. Zotero need not be closed (isolated test instance, port 23124).
 
 Test type vocabulary:
@@ -41,10 +43,10 @@ Test type vocabulary:
 
 ## AC2: Existing startup test passes on Zotero 9
 
-| AC    | Type        | Command / file                          | Expected outcome                                                                                                                                              | Phase                                   |
-| ----- | ----------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| AC2.1 | integration | `npm run test` — `test/startup.test.ts` | log shows `✔ should have plugin instance defined`; `1 passing` after each Phase 1 commit, included in `10 passing` after Phase 2 (see exit-code caveat above) | Phase 1 (every task) + Phase 2 (Task 7) |
-| AC2.2 | integration | `npm run test` (failure mode)           | startup absent/`✖` → exits non-zero; flagged as regression                                                                                                    | Phase 1 + Phase 2                       |
+| AC    | Type        | Command / file                          | Expected outcome                                                                                                                                                            | Phase                                   |
+| ----- | ----------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| AC2.1 | integration | `npm run test` — `test/startup.test.ts` | log shows `✔ should have plugin instance defined`; `1 passing` after each Phase 1 commit, included in `8 passing` after Phase 2 (AC9 re-scoped; see exit-code caveat above) | Phase 1 (every task) + Phase 2 (Task 7) |
+| AC2.2 | integration | `npm run test` (failure mode)           | startup absent/`✖` → exits non-zero; flagged as regression                                                                                                                  | Phase 1 + Phase 2                       |
 
 ---
 
@@ -60,14 +62,16 @@ Test type vocabulary:
 
 ---
 
-## AC9: HTTP dispatch test exercises `Zotero.Server` routing (NEW — DR2 revised)
+## AC9: HTTP dispatch test exercises `Zotero.Server` routing — **RE-SCOPED (2026-05-30)**
 
-| AC    | Type           | Command / file                                   | Expected outcome                                                                                                                                                                                 | Phase            |
-| ----- | -------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| AC9.0 | (precondition) | Task 0 reachability confirmation                 | Scaffold's test profile already enables the local API on port 23124 (confirmed Phase 1); Task 0 just confirms reachability. Re-scope (drop HTTP `it`s, target 8) only if unreachable — unlikely. | Phase 2 (Task 0) |
-| AC9.1 | http-dispatch  | `test/http-dispatch.test.ts` → "GET /api/plus"   | `res.status===200`; `Content-Type` matches `^text/plain`; body `Zotero Local API Plus is running.`; network-free                                                                                 | Phase 2 (Task 5) |
-| AC9.2 | http-dispatch  | `test/http-dispatch.test.ts` → "empty-body POST" | `res.status===400`; body `Error: No identifier provided`; returns before any translator call (network-free)                                                                                      | Phase 2 (Task 5) |
-| AC9.3 | http-dispatch  | `npm run test` (failure mode)                    | either HTTP `it` `✖` → exits non-zero; with AC3 passing, localises fault to dispatch/transport, not endpoint logic                                                                               | Phase 2 (Task 7) |
+**AC9.1, AC9.2, AC9.3 are NOT implemented in this branch.** `test/http-dispatch.test.ts` does not exist. The HTTP dispatch test was written, run, and removed when both `it`s returned `status: 0` from `Zotero.HTTP.request` (in-process XHR rejected pre-response by the server's Origin/CSRF gate) while external `curl` to the same URL returned a clean `200`. Dispatch-surface coverage now lives entirely in **UAT AC1.3** (manual curl on the normal install, Phase 3). See design plan AC9 and `changelog-notes.md` § "AC9 re-scoped" for the full finding.
+
+| AC    | Type            | Command / file                | Expected outcome                                                                                                       | Phase              |
+| ----- | --------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| AC9.0 | (precondition)  | Task 0 outcome                | Recorded as **re-scoped**. Server is reachable from outside (curl 200); in-process XHR is not. No code in this branch. | Phase 2 (Task 0) ✓ |
+| AC9.1 | _not in branch_ | (was `test/http-dispatch.ts`) | RE-SCOPED — not implemented. Coverage falls to UAT AC1.3.                                                              | n/a                |
+| AC9.2 | _not in branch_ | (was `test/http-dispatch.ts`) | RE-SCOPED — not implemented. Coverage falls to UAT AC1.3.                                                              | n/a                |
+| AC9.3 | _not in branch_ | (failure mode)                | n/a — there is no HTTP test to fail.                                                                                   | n/a                |
 
 ---
 
@@ -96,19 +100,19 @@ Test type vocabulary:
 
 ## AC6: Dead `permitBookmarklet` line removed (re-scoped per I5)
 
-| AC    | Type                        | Command / file                                                                        | Expected outcome                                                                                                                                                                                                                                                                                                                                                     | Phase                                                |
-| ----- | --------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| AC6.1 | git-diff                    | `git diff main..HEAD -- src/addon.ts \| grep -E '^-\s*permitBookmarklet\s*=\s*true;'` | exactly one removal line; no other change in `AddItemEndpoint`                                                                                                                                                                                                                                                                                                       | Phase 1 (Task 4)                                     |
-| AC6.2 | integration + http-dispatch | `npm run test` after removal                                                          | **Provisional Phase 1, final Phase 2.** Phase 1: `1 passing` (provisional — startup only). Phase 2: full suite passes incl. the HTTP dispatch test (AC9). **Caveat (I5): confirms suite integrity, NOT that the property is unread** — even AC9 covers only LocalAPI dispatch, not the connector/bookmarklet path. Safety rests on the Phase 1 Task 4 Z9 source pin. | Provisional Phase 1 (Task 4); final Phase 2 (Task 7) |
+| AC    | Type        | Command / file                                                                        | Expected outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Phase                                                |
+| ----- | ----------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| AC6.1 | git-diff    | `git diff main..HEAD -- src/addon.ts \| grep -E '^-\s*permitBookmarklet\s*=\s*true;'` | exactly one removal line; no other change in `AddItemEndpoint`                                                                                                                                                                                                                                                                                                                                                                                                         | Phase 1 (Task 4)                                     |
+| AC6.2 | integration | `npm run test` after removal                                                          | **Provisional Phase 1, final Phase 2.** Phase 1: `1 passing` (provisional — startup only). Phase 2: full in-process suite passes (`8 passing`). **Caveat (I5): confirms suite integrity, NOT that the property is unread** — the in-process tests bypass the dispatch path; AC9 was re-scoped (no automated dispatch coverage). The dispatch-regression backstop is the operator's UAT curl (AC1.3), not automation. Safety rests on the Phase 1 Task 4 Z9 source pin. | Provisional Phase 1 (Task 4); final Phase 2 (Task 7) |
 
 ---
 
 ## AC7: MIME-type typo fixed
 
-| AC    | Type                     | Command / file                                                                         | Expected outcome                                                              | Phase                |
-| ----- | ------------------------ | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------- |
-| AC7.1 | git-diff                 | `git diff main..HEAD -- src/addon.ts \| grep -E '^[+-].*("plain/text"\|"text/plain")'` | one `-` with `"plain/text"`, one `+` with `"text/plain"`; no other such lines | Phase 1 (Task 4)     |
-| AC7.2 | contract + http-dispatch | `endpoint-plus.test.ts` (AC3.1) and `http-dispatch.test.ts` GET (AC9.1)                | both assert `"text/plain"` against the corrected behaviour                    | Phase 2 (Tasks 2, 5) |
+| AC    | Type     | Command / file                                                                         | Expected outcome                                                                                                                 | Phase            |
+| ----- | -------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| AC7.1 | git-diff | `git diff main..HEAD -- src/addon.ts \| grep -E '^[+-].*("plain/text"\|"text/plain")'` | one `-` with `"plain/text"`, one `+` with `"text/plain"`; no other such lines                                                    | Phase 1 (Task 4) |
+| AC7.2 | contract | `endpoint-plus.test.ts` (AC3.1)                                                        | asserts `"text/plain"` against the corrected behaviour. (AC9's HTTP GET would have been a second backstop; re-scoped — see AC9.) | Phase 2 (Task 2) |
 
 ---
 
@@ -125,9 +129,9 @@ Test type vocabulary:
 
 ## AC-Aggregate: suite gate (NEW — critical review I4)
 
-| AC           | Type        | Command / file                   | Expected outcome                                                                                                                                                                                                                                                         | Phase            |
-| ------------ | ----------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| AC-Aggregate | integration | `npm run test` (under `timeout`) | log shows `0 pending` **and** `0 failing`. Target `10 passing` (network up) or `8 passing` (AC9 re-scoped). Read from the log, not the exit code (`124` is expected — see caveat above). A passing _count_ alone does not gate — a `pending`/skipped test fails the gate | Phase 2 (Task 7) |
+| AC           | Type        | Command / file                   | Expected outcome                                                                                                                                                                                                                              | Phase            |
+| ------------ | ----------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| AC-Aggregate | integration | `npm run test` (under `timeout`) | log shows `8 passing`, `0 pending`, `0 failing` (AC9 re-scoped, so target is 8). Read from the log, not the exit code (`124` is expected — see caveat above). A passing _count_ alone does not gate — a `pending`/skipped test fails the gate | Phase 2 (Task 7) |
 
 ---
 
@@ -146,7 +150,8 @@ Test type vocabulary:
 
 ## Coverage summary
 
-- **Automated:** AC-Preflight.1/.2, AC1.1/1.2/1.4, AC2.1/2.2, AC3.1–3.5, AC9.0–9.3, AC4.1–4.3, AC5.1–5.6, AC6.1, AC7.1/7.2, AC8.1–8.4, AC-Aggregate.
+- **Automated:** AC-Preflight.1/.2, AC1.1/1.2/1.4, AC2.1/2.2, AC3.1–3.5, AC4.1–4.3, AC5.1–5.6, AC6.1, AC7.1/7.2, AC8.1–8.4, AC-Aggregate.
+- **Re-scoped (not in this branch):** AC9.0–AC9.3 — coverage falls to UAT AC1.3 (manual curl on the normal install).
 - **Provisional-then-final:** AC6.2 (provisional Phase 1 Task 4; final Phase 2 Task 7, with the I5 caveat).
 - **UAT (`uat-requirements.md`):** AC1.3.
 - **Plan-level DR checks:** DR1.1, DR1.2, DR2.1, DR2.2, DR3.1, DR3.2.
