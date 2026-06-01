@@ -34,3 +34,5 @@ If the Phase 2 arXiv smoke test (`AC4`) fails, it is the operator's call — not
 ## UAT log
 
 _(Append results here. Format: `YYYY-MM-DD: PASS/FAIL — initials — notes`.)_
+
+2026-06-01: PASS — BBS — Zotero 9.0.3 normal-profile install accepted (no compatibility dialog), validating `strict_max_version: "9.*"`. GET `/api/plus` → 200, `text/plain`, body `Zotero Local API Plus is running.` (AC7.1 MIME fix). POST `/api/plus/add-item-by-id` `{"identifier":"10.48550/arXiv.1706.03762"}` → 200, `addedCount=1` ("Attention Is All You Need"). Precondition: the Local API (Settings → Advanced → "Allow other applications on this computer to communicate with Zotero") had to be enabled first — an off toggle returns 403 before dispatch reaches the endpoint.
