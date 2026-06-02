@@ -13,6 +13,7 @@ A Zotero plugin that extends Zotero's local API with additional functionality.
 - Add items to Zotero by identifier (DOI, ISBN, PMID, etc.) via API
 - Auto-fetch an available PDF after adding, with a per-item status when it can't
 - Target a group library and collection, with a discovery endpoint to list them
+- Find-or-create collections (idempotently) in any library or group
 - Health check endpoint to verify plugin status
 - Easy integration with other tools and scripts
 
@@ -139,6 +140,49 @@ Lists My Library and every group library, each with its collections — the
   ]
 }
 ```
+
+### Create Collection
+
+```
+POST /api/plus/create-collection
+Content-Type: application/json
+```
+
+Finds or creates a collection (idempotent by name within the target library and
+parent) and returns its key — handy for ensuring a target collection exists
+before adding items.
+
+#### Request Body
+
+```json
+{
+  "name": "Frameworks bib", // Required
+  "groupID": 1234567, // Optional: target a group library. Omit for My Library.
+  "parentCollectionKey": "ABC123" // Optional: nest under an existing collection in the target library
+}
+```
+
+An unknown `groupID`, or a `parentCollectionKey` not present in the target
+library, returns `400`.
+
+#### Response
+
+```json
+{
+  "status": "success",
+  "created": true,
+  "collection": {
+    "key": "NEWKEY12",
+    "name": "Frameworks bib",
+    "parentKey": null,
+    "libraryID": 1,
+    "groupID": null
+  }
+}
+```
+
+`created` is `false` when an existing same-name collection (same parent and
+library) was returned instead of creating a duplicate.
 
 ## Installation
 
