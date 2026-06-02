@@ -5,8 +5,31 @@ import { config } from "../package.json";
 import { ColumnOptions, DialogHelper } from "zotero-plugin-toolkit";
 import hooks from "./hooks";
 import { createZToolkit } from "./utils/ztoolkit";
+import {
+  classifyPdfStatus,
+  type FetchOutcome,
+  type PdfStatus,
+} from "./utils/pdf-status";
+
+// add-item-by-id 响应中每个新增项目的形状。
+type ItemResult = {
+  title: string;
+  key: string;
+  pdf: PdfStatus;
+  attachmentID?: number;
+};
 
 // 定义 AddItemEndpoint 类
+
+// 判断某个条目是否已挂有 PDF 附件（同步遍历子附件）。属于命令式外壳，
+// 因此放在此处，而非纯函数模块 utils/pdf-status.ts 中。
+function itemHasPdfAttachment(item: Zotero.Item): boolean {
+  for (const id of item.getAttachments()) {
+    const attachment = Zotero.Items.get(id);
+    if (attachment && attachment.isPDFAttachment()) return true;
+  }
+  return false;
+}
 
 // Plus 端点 - 检查 API 是否正常运行
 Zotero.Server.LocalAPI.Plus = class extends Zotero.Server.LocalAPI.Schema {
@@ -28,11 +51,12 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
   // req.data.identifier: 标识符字符串（支持 DOI、ISBN、PMID 等）
   // req.data.collectionKey: 可选的收藏夹 key
   async run(req: {
-    data: { identifier: string; collectionKey?: string };
+    data: { identifier: string; groupID?: number; collectionKey?: string };
   }): Promise<[number, string, string]> {
     try {
       const data = req.data;
       const identifierStr = data.identifier;
+      const groupID = data.groupID;
       const collectionKey = data.collectionKey;
 
       // 验证标识符是否提供
@@ -46,19 +70,32 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
         return [400, "text/plain", "Error: Could not parse identifier"];
       }
 
-      // 获取用户的库 ID 和目标收藏夹
-      const libraryID = Zotero.Libraries.userLibraryID;
-      let collections: number[] | false = false;
+      // 解析目标库：给了 groupID 就用对应的群组库，否则用 My Library。
+      // 校验在任何网络调用之前完成；失败立即返回 400（不再静默回退到 My Library）。
+      let libraryID = Zotero.Libraries.userLibraryID;
+      if (groupID !== undefined) {
+        const groupLibraryID = Zotero.Groups.getLibraryIDFromGroupID(groupID);
+        if (groupLibraryID === false) {
+          return [400, "text/plain", `Error: No group with ID ${groupID}`];
+        }
+        libraryID = groupLibraryID;
+      }
 
-      // 如果指定了收藏夹 key，查询对应的收藏夹
+      // 解析目标收藏夹（在目标库内）。给了 key 但找不到则 400。
+      let collections: number[] | false = false;
       if (collectionKey) {
         const col = Zotero.Collections.getByLibraryAndKey(
           libraryID,
           collectionKey,
         );
-        if (col) {
-          collections = [col.id];
+        if (!col) {
+          return [
+            400,
+            "text/plain",
+            `Error: No collection with key ${collectionKey} in the target library`,
+          ];
         }
+        collections = [col.id];
       }
 
       // 遍历每个标识符并添加对应的项目
@@ -87,6 +124,43 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
         }
       }
 
+      // 添加完成后尝试获取全文 PDF（"Find Available PDF" 的无界面等价方法）。
+      // 翻译器只在部分情况下附带附件；DOI 元数据翻译器不会。因此对尚无 PDF 的
+      // 项目调用 addAvailableFile（单数形式，调用链不含任何窗口/进度 UI，可在
+      // Server 端点中安全调用）。逐项独立 try/catch，单项失败不影响整批。
+      const itemResults: ItemResult[] = [];
+      for (const item of newItems) {
+        const alreadyHadPdf = itemHasPdfAttachment(item);
+        let outcome: FetchOutcome | null = null;
+        let attachmentID: number | undefined;
+
+        if (!alreadyHadPdf) {
+          try {
+            const attachment = await Zotero.Attachments.addAvailableFile(item);
+            if (attachment) {
+              outcome = "attached";
+              attachmentID = attachment.id;
+            } else {
+              outcome = "none";
+            }
+          } catch (e: any) {
+            // 记录错误但继续处理其他项目
+            Zotero.logError(e);
+            outcome = "error";
+          }
+        }
+
+        const entry: ItemResult = {
+          title: item.getField("title"),
+          key: item.key,
+          pdf: classifyPdfStatus(alreadyHadPdf, outcome),
+        };
+        if (attachmentID !== undefined) {
+          entry.attachmentID = attachmentID;
+        }
+        itemResults.push(entry);
+      }
+
       // 返回添加结果
       if (newItems.length > 0) {
         return [
@@ -95,7 +169,9 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
           JSON.stringify({
             status: "success",
             addedCount: newItems.length,
-            titles: newItems.map((i) => i.getField("title")),
+            // 由 itemResults 派生，确保与 items[] 中的标题不会分叉。
+            titles: itemResults.map((r) => r.title),
+            items: itemResults,
           }),
         ];
       } else {
@@ -122,12 +198,20 @@ Zotero.Server.LocalAPI.GetSelectedCollectionEndpoint = class extends (
       if (collection) {
         ztoolkit.log("当前 Collection 名称:", collection.name);
         ztoolkit.log("当前 Collection Key:", collection.key);
+        // 同时返回库标识，便于与 add-item-by-id 的 groupID 目标组合使用。
+        const selLibraryID = collection.libraryID;
+        const selGroupID =
+          selLibraryID === Zotero.Libraries.userLibraryID
+            ? null
+            : Zotero.Groups.getGroupIDFromLibraryID(selLibraryID);
         return [
           200,
           "application/json",
           JSON.stringify({
             name: collection.name,
             key: collection.key,
+            libraryID: selLibraryID,
+            groupID: selGroupID,
           }),
         ];
       } else {
@@ -137,6 +221,60 @@ Zotero.Server.LocalAPI.GetSelectedCollectionEndpoint = class extends (
       }
     } catch (e: any) {
       // 捕获并返回服务器错误
+      return [500, "text/plain", "Internal Server Error: " + e.message];
+    }
+  }
+};
+
+// Libraries 端点 - 列出 My Library 与所有群组库及各自的收藏夹，
+// 便于发现 groupID 与 collectionKey（add-item-by-id 的目标参数）。
+Zotero.Server.LocalAPI.GetLibrariesEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["GET"];
+
+  async run(_: any): Promise<[number, string, string]> {
+    try {
+      const collectionsFor = (libraryID: number) =>
+        Zotero.Collections.getByLibrary(libraryID, true).map((c) => ({
+          key: c.key,
+          name: c.name,
+          parentKey: c.parentKey || null,
+        }));
+
+      const userLibraryID = Zotero.Libraries.userLibraryID;
+      const libraries: Array<{
+        type: "user" | "group";
+        libraryID: number;
+        groupID?: number;
+        name: string;
+        collections: Array<{
+          key: string;
+          name: string;
+          parentKey: string | null;
+        }>;
+      }> = [
+        {
+          type: "user",
+          libraryID: userLibraryID,
+          name: "My Library",
+          collections: collectionsFor(userLibraryID),
+        },
+      ];
+
+      // libraryTypeID 对群组库即为 groupID（来自 LibraryAbstract，非可选）。
+      for (const group of Zotero.Groups.getAll()) {
+        libraries.push({
+          type: "group",
+          libraryID: group.libraryID,
+          groupID: group.libraryTypeID,
+          name: group.name,
+          collections: collectionsFor(group.libraryID),
+        });
+      }
+
+      return [200, "application/json", JSON.stringify({ libraries })];
+    } catch (e: any) {
       return [500, "text/plain", "Internal Server Error: " + e.message];
     }
   }
@@ -185,6 +323,8 @@ class Addon {
     Zotero.Server.Endpoints["/api/plus"] = Zotero.Server.LocalAPI.Plus;
     Zotero.Server.Endpoints["/api/plus/selected-collection"] =
       Zotero.Server.LocalAPI.GetSelectedCollectionEndpoint;
+    Zotero.Server.Endpoints["/api/plus/libraries"] =
+      Zotero.Server.LocalAPI.GetLibrariesEndpoint;
     ztoolkit.log("Registering Local API Plus endpoint");
     ztoolkit.log(Zotero.Server.LocalAPI.Plus);
   }

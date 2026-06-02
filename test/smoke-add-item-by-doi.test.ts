@@ -21,6 +21,38 @@ describe("smoke /api/plus/add-item-by-id (arXiv DOI, network)", function () {
     assert.isAtLeast(payload.addedCount, 1);
     assert.isAtLeast(payload.titles.length, 1);
 
+    // Per-item PDF status (the ping-back). Assert SHAPE only, never
+    // `=== "fetched"`: whether this arXiv DataCite DOI resolves to a PDF
+    // headlessly is the uncertain bit (Unpaywall coverage), and a hard
+    // assertion would be flaky. The observed value is the empirical evidence
+    // that settles note §4 — logged below for the record.
+    const allowedPdf = ["present", "fetched", "unavailable", "error"];
+    assert.isArray(payload.items, "response carries an items[] array");
+    assert.lengthOf(
+      payload.items,
+      payload.addedCount,
+      "items[] length matches addedCount",
+    );
+    for (const it of payload.items) {
+      assert.isString(it.title, "item.title is a string");
+      assert.isString(it.key, "item.key is a string");
+      assert.include(
+        allowedPdf,
+        it.pdf,
+        `item.pdf is a valid status (got ${it.pdf})`,
+      );
+      if (it.pdf === "fetched") {
+        assert.isNumber(
+          it.attachmentID,
+          "a fetched item carries a numeric attachmentID",
+        );
+      }
+    }
+    Zotero.debug(
+      "smoke pdf outcomes: " +
+        JSON.stringify(payload.items.map((i: { pdf: string }) => i.pdf)),
+    );
+
     // Best-effort cleanup so reruns are idempotent. Failure here is logged but
     // must NOT mask the assertions above. Uses the synchronous Zotero.Items.get
     // path (per code-review I2 — not getAsync, which is the non-standard route).
