@@ -280,6 +280,93 @@ Zotero.Server.LocalAPI.GetLibrariesEndpoint = class extends (
   }
 };
 
+// Create-Collection 端点 - 在目标库（默认 My Library，或给定 groupID 的群组库）
+// 中按名查找或创建收藏夹。幂等：同库、同父、同名已存在则返回既有的。
+Zotero.Server.LocalAPI.CreateCollectionEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["POST"];
+  supportedDataTypes = ["application/json"];
+
+  async run(req: {
+    data: { name?: string; groupID?: number; parentCollectionKey?: string };
+  }): Promise<[number, string, string]> {
+    try {
+      const { name, groupID, parentCollectionKey } = req.data;
+
+      if (!name || !name.trim()) {
+        return [400, "text/plain", "Error: No collection name provided"];
+      }
+
+      // 解析目标库
+      let libraryID = Zotero.Libraries.userLibraryID;
+      if (groupID !== undefined) {
+        const groupLibraryID = Zotero.Groups.getLibraryIDFromGroupID(groupID);
+        if (groupLibraryID === false) {
+          return [400, "text/plain", `Error: No group with ID ${groupID}`];
+        }
+        libraryID = groupLibraryID;
+      }
+
+      // 解析父收藏夹（若指定），校验其在目标库内存在
+      let parentKey: string | undefined;
+      if (parentCollectionKey) {
+        const parent = Zotero.Collections.getByLibraryAndKey(
+          libraryID,
+          parentCollectionKey,
+        );
+        if (!parent) {
+          return [
+            400,
+            "text/plain",
+            `Error: No parent collection with key ${parentCollectionKey} in the target library`,
+          ];
+        }
+        parentKey = parent.key;
+      }
+
+      // 幂等查找：同库、同父、同名已存在则复用，否则新建。
+      const existing = Zotero.Collections.getByLibrary(libraryID, true).find(
+        (c) => c.name === name && (c.parentKey || null) === (parentKey || null),
+      );
+
+      let collection: Zotero.Collection;
+      let created: boolean;
+      if (existing) {
+        collection = existing;
+        created = false;
+      } else {
+        collection = new Zotero.Collection({ name, libraryID, parentKey });
+        await collection.saveTx();
+        created = true;
+      }
+
+      const groupOut =
+        libraryID === Zotero.Libraries.userLibraryID
+          ? null
+          : Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+
+      return [
+        200,
+        "application/json",
+        JSON.stringify({
+          status: "success",
+          created,
+          collection: {
+            key: collection.key,
+            name: collection.name,
+            parentKey: collection.parentKey || null,
+            libraryID,
+            groupID: groupOut,
+          },
+        }),
+      ];
+    } catch (e: any) {
+      return [500, "text/plain", "Internal Server Error: " + e.message];
+    }
+  }
+};
+
 // 插件主类 - 管理插件的生命周期和数据
 class Addon {
   public data: {
@@ -325,6 +412,8 @@ class Addon {
       Zotero.Server.LocalAPI.GetSelectedCollectionEndpoint;
     Zotero.Server.Endpoints["/api/plus/libraries"] =
       Zotero.Server.LocalAPI.GetLibrariesEndpoint;
+    Zotero.Server.Endpoints["/api/plus/create-collection"] =
+      Zotero.Server.LocalAPI.CreateCollectionEndpoint;
     ztoolkit.log("Registering Local API Plus endpoint");
     ztoolkit.log(Zotero.Server.LocalAPI.Plus);
   }
