@@ -129,6 +129,9 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
       // 项目调用 addAvailableFile（单数形式，调用链不含任何窗口/进度 UI，可在
       // Server 端点中安全调用）。逐项独立 try/catch，单项失败不影响整批。
       const itemResults: ItemResult[] = [];
+      // newItems are the regular bibliographic items saved for the identifiers;
+      // DOI/ISBN/PMID search translators don't return standalone top-level
+      // attachments, so getField("title") and the PDF lookup apply to real items.
       for (const item of newItems) {
         const alreadyHadPdf = itemHasPdfAttachment(item);
         let outcome: FetchOutcome | null = null;
@@ -200,6 +203,9 @@ Zotero.Server.LocalAPI.GetSelectedCollectionEndpoint = class extends (
         ztoolkit.log("当前 Collection Key:", collection.key);
         // 同时返回库标识，便于与 add-item-by-id 的 groupID 目标组合使用。
         const selLibraryID = collection.libraryID;
+        // getGroupIDFromLibraryID is typed `number` (not `number | false`); the
+        // guard ensures it is only called for a group library, so it always
+        // yields a real groupID here.
         const selGroupID =
           selLibraryID === Zotero.Libraries.userLibraryID
             ? null
@@ -341,6 +347,9 @@ Zotero.Server.LocalAPI.CreateCollectionEndpoint = class extends (
         created = true;
       }
 
+      // getGroupIDFromLibraryID is typed `number` (not `number | false`); the
+      // guard ensures it is only called for a group library, so it always
+      // yields a real groupID here.
       const groupOut =
         libraryID === Zotero.Libraries.userLibraryID
           ? null
