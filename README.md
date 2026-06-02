@@ -11,6 +11,8 @@ A Zotero plugin that extends Zotero's local API with additional functionality.
 
 - Extends Zotero's local API with custom endpoints
 - Add items to Zotero by identifier (DOI, ISBN, PMID, etc.) via API
+- Auto-fetch an available PDF after adding, with a per-item status when it can't
+- Target a group library and collection, with a discovery endpoint to list them
 - Health check endpoint to verify plugin status
 - Easy integration with other tools and scripts
 
@@ -39,14 +41,22 @@ Content-Type: application/json
 
 Adds items to Zotero using identifiers like DOI, ISBN, PMID, etc.
 
+After saving each item, the endpoint attempts a headless "Find Available PDF"
+(Zotero's open-access / DOI / URL resolver chain) and reports the outcome per
+item.
+
 #### Request Body
 
 ```json
 {
   "identifier": "10.1038/nature12373", // Required: DOI, ISBN, PMID, etc.
-  "collectionKey": "ABC123" // Optional: Collection key to add items to
+  "groupID": 1234567, // Optional: target a group library (see GET /api/plus/libraries). Omit for My Library.
+  "collectionKey": "ABC123" // Optional: collection key, resolved within the target library
 }
 ```
+
+An unknown `groupID`, or a `collectionKey` not present in the target library,
+returns `400` — the item is not silently added to My Library.
 
 #### Response
 
@@ -54,9 +64,23 @@ Adds items to Zotero using identifiers like DOI, ISBN, PMID, etc.
 {
   "status": "success",
   "addedCount": 1,
-  "titles": ["Article Title"]
+  "titles": ["Article Title"],
+  "items": [
+    {
+      "title": "Article Title",
+      "key": "ABCD1234",
+      "pdf": "fetched", // present | fetched | unavailable | error
+      "attachmentID": 456 // present only when pdf === "fetched"
+    }
+  ]
 }
 ```
+
+Per-item `pdf`: `present` (a PDF was already attached), `fetched` (one was
+retrieved this call), `unavailable` (none found — fetch it manually, e.g. via the
+browser connector), `error` (the attempt threw). Retrieval depends on Zotero's
+resolver configuration (open-access lookup and any configured OpenURL/proxy
+resolver), so `unavailable` is a normal outcome, not a failure.
 
 ### Get Selected Collection
 
@@ -71,7 +95,9 @@ Returns information about the currently selected collection in Zotero.
 ```json
 {
   "name": "My Collection",
-  "key": "ABC123"
+  "key": "ABC123",
+  "libraryID": 1,
+  "groupID": null // the group ID when the collection is in a group library, else null
 }
 ```
 
@@ -79,6 +105,39 @@ Returns information about the currently selected collection in Zotero.
 
 ```
 No Collection selected.
+```
+
+### List Libraries & Collections
+
+```
+GET /api/plus/libraries
+```
+
+Lists My Library and every group library, each with its collections — the
+`groupID` and `collectionKey` values used to target `add-item-by-id`.
+
+#### Response
+
+```json
+{
+  "libraries": [
+    {
+      "type": "user",
+      "libraryID": 1,
+      "name": "My Library",
+      "collections": [
+        { "key": "AB12CD34", "name": "Reading", "parentKey": null }
+      ]
+    },
+    {
+      "type": "group",
+      "libraryID": 5,
+      "groupID": 1234567,
+      "name": "Project X",
+      "collections": []
+    }
+  ]
+}
 ```
 
 ## Installation
