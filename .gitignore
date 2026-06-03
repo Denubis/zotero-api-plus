@@ -14,3 +14,6 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# Fork-local working notes (design/implementation plans, review findings)
+docs/
