@@ -13,7 +13,7 @@ Zotero.Server.LocalAPI.Plus = class extends Zotero.Server.LocalAPI.Schema {
   supportedMethods = ["GET"];
 
   async run(_: any): Promise<[number, string, string]> {
-    return [200, "plain/text", "Zotero Local API Plus is running."];
+    return [200, "text/plain", "Zotero Local API Plus is running."];
   }
 };
 
@@ -23,7 +23,6 @@ Zotero.Server.LocalAPI.AddItemEndpoint = class extends (
 ) {
   supportedMethods = ["POST"];
   supportedDataTypes = ["application/json"];
-  permitBookmarklet = true;
 
   // 处理添加项目请求
   // req.data.identifier: 标识符字符串（支持 DOI、ISBN、PMID 等）

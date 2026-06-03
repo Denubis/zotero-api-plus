@@ -1,6 +1,6 @@
 # Zotero API Plus
 
-[![zotero target version](https://img.shields.io/badge/Zotero-8-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
+[![zotero target version](https://img.shields.io/badge/Zotero-7%7C8%7C9-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL-3.0-or-later](https://img.shields.io/github/license/GOKORURI007/zotero-api-plus)](https://github.com/GOKORURI007/zotero-api-plus/blob/main/LICENSE)
 
 [English](README.md) | [简体中文](doc/README-zhCN.md)
@@ -91,8 +91,16 @@ No Collection selected.
 
 ## Usage
 
-1. Ensure Zotero's local API is enabled (go to `Edit > Preferences > Advanced > Files and Folders > Show Data Directory`, then edit `prefs.js` and add `user_pref("extensions.zotero.httpServer.enabled", true);`).
-2. Use the API endpoints as described above.
+1. Enable Zotero's local API: open _Settings → Advanced_ and tick "Allow other applications on this computer to communicate with Zotero".
+2. Verify the API is reachable:
+
+   ```
+   curl http://127.0.0.1:23119/api/plus
+   ```
+
+   Expected response body: `Zotero Local API Plus is running.` with `Content-Type: text/plain`.
+
+3. Use the API endpoints as described above.
 
 ## Development
 
