@@ -31,6 +31,9 @@ declare namespace Zotero {
       let GetSelectedCollectionEndpoint: new () => Schema;
       let GetLibrariesEndpoint: new () => Schema;
       let CreateCollectionEndpoint: new () => Schema;
+      let OpenPdfEndpoint: new () => Schema;
+      let AddNoteEndpoint: new () => Schema;
+      let ReadNoteEndpoint: new () => Schema;
     }
     const Endpoints: {
       [key: string]: any;
