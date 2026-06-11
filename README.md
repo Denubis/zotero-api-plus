@@ -14,6 +14,8 @@ A Zotero plugin that extends Zotero's local API with additional functionality.
 - Auto-fetch an available PDF after adding, with a per-item status when it can't
 - Target a group library and collection, with a discovery endpoint to list them
 - Find-or-create collections (idempotently) in any library or group
+- Open a PDF attachment at a specific page in the built-in reader via a clickable link
+- Add a page-anchored note (a reader annotation) to a PDF, and read notes back
 - Health check endpoint to verify plugin status
 - Easy integration with other tools and scripts
 
@@ -183,6 +185,130 @@ library, returns `400`.
 
 `created` is `false` when an existing same-name collection (same parent and
 library) was returned instead of creating a duplicate.
+
+### Open a PDF at a Page
+
+```
+GET /api/plus/open-pdf?key=<itemKey>&page=<n>&libraryID=<id>
+```
+
+Opens a PDF attachment in Zotero's built-in reader and navigates to a page.
+Because it is a plain `GET`, an
+`http://localhost:23119/api/plus/open-pdf?...` link is clickable from a browser,
+a Markdown preview, or a note app — handy for citation verification, where a link
+should jump the reader to the cited page.
+
+#### Query Parameters
+
+- `key` (required) — a Zotero item key: either a PDF **attachment** key, or a
+  **parent** item key (then its first PDF child attachment is used).
+- `page` (required) — the 1-based **physical** page of the PDF (page 1 = the
+  first page of the file). It is converted to Zotero's 0-based `pageIndex`. A
+  page beyond the PDF's length returns `400` (no silent clamp).
+- `libraryID` (optional) — the numeric Zotero library id (a group library's
+  library id, **not** its groupID; see `GET /api/plus/libraries`). Attachment
+  keys are unique per library, not globally. Omit to search My Library first,
+  then each group library.
+
+The page opens in Zotero's built-in reader regardless of any external PDF handler
+you may have configured. If a reader tab is already open for the item, it is
+navigated rather than duplicated.
+
+#### Response
+
+```json
+{
+  "ok": true,
+  "key": "4G7Z5EUI",
+  "page": 3,
+  "title": "Schönbrodt and Wagenmakers - 2018 - …"
+}
+```
+
+`400` for missing/invalid params or a page beyond the PDF; `404` when the key
+matches no item, or the item has no PDF attachment; `500` if the reader fails to
+open.
+
+### Add a Note to a Page
+
+```
+POST /api/plus/add-note
+Content-Type: application/json
+```
+
+Creates a page-anchored **note annotation** on a PDF — a sticky note that shows
+in Zotero's reader (annotation sidebar and on the page). Returns the new
+annotation's key, which `read-note` reads back.
+
+#### Request Body
+
+```jsonc
+{
+  "key": "4G7Z5EUI", // Required: PDF attachment, or a parent item (→ its first PDF child)
+  "page": 3, // Required: 1-based physical page; validated ≤ the PDF's length (else 400)
+  "text": "Jeffreys table — verify cited threshold", // Required: the note body
+  "libraryID": 27, // Optional: Zotero library id (see GET /api/plus/libraries)
+  "color": "#ffd400", // Optional: #rrggbb, defaults to Zotero yellow
+}
+```
+
+#### Response
+
+```json
+{ "ok": true, "key": "9HCAT8A4", "page": 3, "attachmentKey": "4G7Z5EUI" }
+```
+
+`400` for bad/missing params or a page beyond the PDF; `404` when the key matches
+no item, or the item has no PDF attachment; `500` if the save fails. The note icon
+is placed at a fixed position on the page (it is not located against the text).
+
+### Read Notes
+
+```
+GET /api/plus/read-note?key=<key>&libraryID=<id>
+```
+
+Reads page-anchored note annotations. The result depends on what `key` resolves
+to:
+
+- a **note-annotation** key → that one note
+- a **parent item or PDF attachment** key → all note annotations on that document
+
+#### Response (single)
+
+```json
+{
+  "ok": true,
+  "key": "9HCAT8A4",
+  "page": 3,
+  "pageLabel": "3",
+  "comment": "Jeffreys table — verify cited threshold",
+  "color": "#ffd400",
+  "type": "note"
+}
+```
+
+#### Response (list)
+
+```json
+{
+  "ok": true,
+  "notes": [
+    {
+      "key": "9HCAT8A4",
+      "page": 3,
+      "pageLabel": "3",
+      "comment": "Jeffreys table — verify cited threshold",
+      "color": "#ffd400",
+      "type": "note"
+    }
+  ]
+}
+```
+
+`page` is the 1-based physical page recovered from the annotation. `400` for
+missing/invalid params, or an annotation key that isn't a note; `404` for an
+unknown key.
 
 ## Installation
 
