@@ -18,7 +18,9 @@ plugin ID, so it installs in place over the original. Tracks Zotero 7, 8, and 9.
 - Find-or-create collections (idempotently) in any library or group
 - Open a PDF attachment at a specific page in the built-in reader via a clickable link
 - Add a page-anchored note (a reader annotation) to a PDF, and read notes back
-- Highlight a quoted span in a PDF by its text (anchored on its first/last words)
+- Highlight a quoted span by its text (first 5 pages), or by pre-computed
+  rectangles on any page
+- Read annotations back (notes and highlights) and delete an annotation
 - Health check endpoint to verify plugin status
 - Easy integration with other tools and scripts
 
@@ -313,56 +315,142 @@ to:
 missing/invalid params, or an annotation key that isn't a note; `404` for an
 unknown key.
 
-### Add a Highlight to a Span
+### Add a Highlight
 
 ```
 POST /api/plus/add-highlight
 Content-Type: application/json
 ```
 
-Highlights a quoted span in a PDF by its **text**, rather than by coordinates.
-The endpoint reads the PDF's recognised word boxes, anchors on the first and last
-few words of the quote, and highlights everything between them — one rectangle per
-line. The middle of the quote need not match exactly (punctuation, hyphenation, and
-running headers between the anchors are tolerated), so a quote pasted from the
-document is usually enough.
+Creates a highlight annotation on a PDF. There are two modes; the endpoint picks
+**position mode** when the body contains `rects`, otherwise **text mode**.
 
-#### Request Body
+#### Text mode — highlight a quoted span
+
+Give a quote; the endpoint reads the PDF's recognised word boxes, anchors on the
+first and last few words, and highlights everything between them — one rectangle
+per line. The middle of the quote need not match exactly (punctuation, hyphenation,
+and running headers between the anchors are tolerated).
+
+**This mode only sees the first 5 pages.** Zotero's recogniser
+(`getRecognizerData`) hard-caps at 5 pages, and the plugin cannot lift that. To
+highlight later pages, use position mode.
 
 ```jsonc
 {
   "key": "4G7Z5EUI", // Required: PDF attachment, or a parent item (→ its first PDF child)
-  "page": 8, // Required: 1-based physical page where the span STARTS (it may run onto page + 1)
+  "page": 3, // Required: 1-based start page (≤ 5; the span may run onto page + 1)
   "text": "the stopping rule principle", // Required: the quote to find and highlight
   "libraryID": 27, // Optional: Zotero library id (see GET /api/plus/libraries)
   "color": "#ffd400", // Optional: #rrggbb, defaults to Zotero yellow
-  "comment": "Bayes factors retain meaning", // Optional: a comment attached to the highlight
+  "comment": "Bayes factors retain meaning", // Optional: a comment on the highlight
 }
 ```
 
-A span that crosses a single page break is supported: give the page where the span
-starts, and the continuation onto the next page is highlighted via the annotation's
-`nextPageRects`.
+A span crossing a single page break is supported (continuation via `nextPageRects`).
+Response: `{ "ok": true, "key": "…", "page": 3, "matched": "…", "rects": [[…]], "nextPageRects": [[…]] }`
+(`nextPageRects` only across a break).
 
-#### Response
+#### Position mode — highlight pre-computed rectangles (any page)
+
+Supply the rectangles yourself, so highlighting works on **any page** — the
+recogniser is bypassed. Compute per-quote rects with your own PDF tooling (e.g.
+PyMuPDF `page.search_for(...)`), which returns boxes in a **top-left** origin, and
+pass them with the page height; the endpoint flips them to PDF bottom-left and
+saves.
+
+```jsonc
+{
+  "key": "4G7Z5EUI", // Required: PDF attachment, or a parent item
+  "page": 80, // Required: 1-based physical page (= PyMuPDF page index + 1); validated ≤ the PDF length
+  "rects": [[71, 120, 521, 140]], // Required: TOP-LEFT origin [x1, yTop, x2, yBot], in PDF points, one per line
+  "pageHeight": 792, // Required: the page height in PDF points (PyMuPDF page.rect.height), for the y-flip
+  "text": "the stopping rule principle", // Optional: the quoted text (→ the highlight's text)
+  "comment": "[@schonbrodt2018, p.80]", // Optional: a comment on the highlight
+  "libraryID": 27, // Optional
+  "color": "#ffd400", // Optional
+}
+```
+
+Response: `{ "ok": true, "key": "…", "page": 80, "rects": [[71, 652, 521, 672]] }`
+(`rects` echoed back in PDF bottom-left coordinates).
+
+#### Errors
+
+The endpoint's own failures return a structured body `{ "ok": false, "code": "…",
+"message": "…" }` so a caller can branch a fallback (e.g. drop a page note instead):
+
+| code                   | status | meaning                                                    |
+| ---------------------- | ------ | ---------------------------------------------------------- |
+| `bad_request`          | 400    | missing/invalid params                                     |
+| `span_not_found`       | 422    | text mode: the start or end anchor isn't on the page       |
+| `no_text_layer`        | 422    | text mode: the page has no extractable text (scanned PDF)  |
+| `page_beyond_cap`      | 422    | text mode: the page is past the recogniser's first 5 pages |
+| `page_beyond_document` | 400    | position mode: the page is past the end of the PDF         |
+| `no_pdf_attachment`    | 404    | the item has no PDF attachment                             |
+| `internal`             | 500    | the PDF couldn't be read, or the save failed               |
+
+An unknown item key or library id still returns a plain-text `404`/`400` (from
+shared item resolution), without a `code`.
+
+### Read Annotations
+
+```
+GET /api/plus/read-annotations?key=<key>&type=<filter>&libraryID=<id>
+```
+
+Reads annotations back — unlike `read-note`, this can return **highlights** too,
+which makes a re-run of a batch annotation job idempotent (you can see what's
+already there). The result depends on what `key` resolves to:
+
+- an **annotation** key → that one annotation
+- a **parent item or PDF attachment** key → all matching annotations on that document
+
+`type` filters to `note`, `highlight`, or `all` (default `all`).
+
+#### Response (list)
 
 ```json
 {
   "ok": true,
-  "key": "GJZ8ZL3F",
-  "page": 8,
-  "matched": "the stopping rule principle … retain their meaning",
-  "rects": [[71, 270, 521, 280]],
-  "nextPageRects": [[71, 700, 300, 710]]
+  "annotations": [
+    {
+      "key": "GJZ8ZL3F",
+      "type": "highlight",
+      "page": 80,
+      "pageLabel": "80",
+      "comment": "[@schonbrodt2018, p.80]",
+      "color": "#ffd400",
+      "text": "the stopping rule principle"
+    }
+  ]
 }
 ```
 
-`matched` is the text actually swept between the anchors; `rects` (and
-`nextPageRects`, present only across a page break) are the highlight rectangles in
-PDF user space. `400` for bad/missing params or a page beyond the recogniser's
-range (which has a 50-page cap); `404` when the key matches no item, the item has
-no PDF attachment, or the span's start/end anchor can't be located on the page;
-`500` if the PDF text layout can't be read or the save fails.
+A single-annotation key returns the same fields at the top level alongside
+`ok: true`. `text` is the highlighted span for highlights (empty for notes). `400`
+for missing/invalid params or a `type` mismatch on a single annotation key; `404`
+for an unknown key.
+
+### Delete an Annotation
+
+```
+POST /api/plus/delete-annotation
+Content-Type: application/json
+```
+
+Deletes one annotation (note or highlight). Enables replace-on-edit and cleaning
+up annotations created by mistake.
+
+```jsonc
+{
+  "key": "GJZ8ZL3F", // Required: an annotation key
+  "libraryID": 27, // Optional: Zotero library id
+}
+```
+
+Response `{ "ok": true, "key": "GJZ8ZL3F" }`. `400` if the key resolves to
+something that isn't an annotation; `404` for an unknown key.
 
 ## Installation
 
