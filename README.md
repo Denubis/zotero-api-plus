@@ -1,11 +1,13 @@
-# Zotero API Plus
+# Zotero 9 API Plus
 
 [![zotero target version](https://img.shields.io/badge/Zotero-7%7C8%7C9-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
-[![License: AGPL-3.0-or-later](https://img.shields.io/github/license/GOKORURI007/zotero-api-plus)](https://github.com/GOKORURI007/zotero-api-plus/blob/main/LICENSE)
+[![License: AGPL-3.0-or-later](https://img.shields.io/github/license/Denubis/zotero-api-plus)](https://github.com/Denubis/zotero-api-plus/blob/main/LICENSE)
 
 [English](README.md) | [简体中文](doc/README-zhCN.md)
 
-A Zotero plugin that extends Zotero's local API with additional functionality.
+A Zotero 9-ready fork of [GOKORURI007/zotero-api-plus](https://github.com/GOKORURI007/zotero-api-plus)
+that extends Zotero's local API with additional endpoints. It keeps the same
+plugin ID, so it installs in place over the original. Tracks Zotero 7, 8, and 9.
 
 ## Features
 

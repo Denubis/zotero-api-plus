@@ -1,10 +1,10 @@
 {
   "name": "zotero-api-plus",
   "type": "module",
-  "version": "0.2.1",
-  "description": "More features for Zotero Local API",
+  "version": "0.3.0",
+  "description": "Extra local-API endpoints for Zotero 9: PDF reader, page notes, text highlights, and group/collection targeting.",
   "config": {
-    "addonName": "Zotero API Plus",
+    "addonName": "Zotero 9 API Plus",
     "addonID": "zotero-api-plus@gokokruri007.com",
     "addonRef": "zotero-api-plus",
     "addonInstance": "ZoteroAPIPlus",
@@ -12,13 +12,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GOKORURI007/zotero-api-plus.git"
+    "url": "git+https://github.com/Denubis/zotero-api-plus.git"
   },
-  "author": "GOKORURI007",
+  "author": "Brian Ballsun-Stanton",
   "bugs": {
-    "url": "https://github.com/GOKORURI007/zotero-api-plus/issues"
+    "url": "https://github.com/Denubis/zotero-api-plus/issues"
   },
-  "homepage": "https://github.com/GOKORURI007/zotero-api-plus#readme",
+  "homepage": "https://github.com/Denubis/zotero-api-plus#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
