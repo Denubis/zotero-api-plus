@@ -50,9 +50,18 @@ export type HighlightZone = {
   sortTop: number;
 };
 
+// Stable failure codes the consumer branches its note-only fallback on.
+//   empty_text     — the query was blank (belt-and-braces; the parser guards too)
+//   no_text_layer  — the page has no extractable words (scanned / image-only PDF)
+//   span_not_found — the page has text but the start or end anchor is absent
+export type HighlightErrorCode =
+  | "empty_text"
+  | "no_text_layer"
+  | "span_not_found";
+
 export type HighlightMatchResult =
   | { ok: true; zone: HighlightZone }
-  | { ok: false; error: string };
+  | { ok: false; code: HighlightErrorCode; message: string };
 
 // How many leading/trailing tokens form an anchor.
 const ANCHOR = 4;
@@ -65,6 +74,16 @@ function toPositiveInt(value: unknown): number | null {
         ? Number(value.trim())
         : NaN;
   return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
+// A position-mode rect is exactly four finite numbers [x1, yTop, x2, yBot] in
+// the consumer's TOP-LEFT origin (e.g. PyMuPDF search_for output).
+function isRect(r: unknown): r is [number, number, number, number] {
+  return (
+    Array.isArray(r) &&
+    r.length === 4 &&
+    r.every((v) => typeof v === "number" && Number.isFinite(v))
+  );
 }
 
 // Lowercase and strip leading/trailing non-alphanumerics (keep internals like
@@ -143,6 +162,124 @@ export function parseAddHighlightParams(raw: {
   }
 
   return { ok: true, params: { key, page, text, libraryID, color, comment } };
+}
+
+// Position (rects-input) mode params: the consumer supplies pre-computed rects
+// (TOP-LEFT origin) plus the page height, so highlighting works on ANY page
+// without the 5-page recogniser. `text` is the quote (→ annotationText), not a
+// search target.
+export type AddHighlightRectsParams = {
+  key: string;
+  page: number; // 1-based physical page
+  rects: number[][]; // TOP-LEFT origin [x1, yTop, x2, yBot]
+  pageHeight: number; // page height in PDF points, for the y-flip
+  text?: string;
+  libraryID?: number;
+  color?: string;
+  comment?: string;
+};
+
+export type AddHighlightRectsParseResult =
+  | { ok: true; params: AddHighlightRectsParams }
+  | { ok: false; error: string };
+
+// Parse the POST/JSON body for position (rects-input) mode (or a 400 message).
+export function parseAddHighlightRectsParams(raw: {
+  key?: unknown;
+  page?: unknown;
+  rects?: unknown;
+  pageHeight?: unknown;
+  text?: unknown;
+  libraryID?: unknown;
+  color?: unknown;
+  comment?: unknown;
+}): AddHighlightRectsParseResult {
+  if (typeof raw.key !== "string" || !raw.key.trim()) {
+    return { ok: false, error: "Error: No item key provided" };
+  }
+  const key = raw.key.trim();
+
+  if (raw.page === undefined || raw.page === null || raw.page === "") {
+    return { ok: false, error: "Error: No page provided" };
+  }
+  const page = toPositiveInt(raw.page);
+  if (page === null) {
+    return {
+      ok: false,
+      error: `Error: Invalid page '${String(raw.page)}' (expected a 1-based integer >= 1)`,
+    };
+  }
+
+  if (!Array.isArray(raw.rects) || raw.rects.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Error: No rects provided (expected a non-empty array of [x1,yTop,x2,yBot])",
+    };
+  }
+  const rects: number[][] = [];
+  for (const r of raw.rects) {
+    if (!isRect(r)) {
+      return {
+        ok: false,
+        error: `Error: Invalid rect ${JSON.stringify(r)} (expected four finite numbers [x1,yTop,x2,yBot])`,
+      };
+    }
+    rects.push([r[0], r[1], r[2], r[3]]);
+  }
+
+  const pageHeight =
+    typeof raw.pageHeight === "number" && Number.isFinite(raw.pageHeight)
+      ? raw.pageHeight
+      : null;
+  if (pageHeight === null || pageHeight <= 0) {
+    return {
+      ok: false,
+      error: `Error: Invalid pageHeight '${String(raw.pageHeight)}' (expected a positive number, the page height in PDF points)`,
+    };
+  }
+
+  let text: string | undefined;
+  if (typeof raw.text === "string" && raw.text.length > 0) {
+    text = raw.text;
+  }
+
+  let libraryID: number | undefined;
+  if (
+    raw.libraryID !== undefined &&
+    raw.libraryID !== null &&
+    raw.libraryID !== ""
+  ) {
+    const lib = toPositiveInt(raw.libraryID);
+    if (lib === null) {
+      return {
+        ok: false,
+        error: `Error: Invalid libraryID '${String(raw.libraryID)}'`,
+      };
+    }
+    libraryID = lib;
+  }
+
+  let color: string | undefined;
+  if (raw.color !== undefined && raw.color !== null && raw.color !== "") {
+    if (typeof raw.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(raw.color)) {
+      return {
+        ok: false,
+        error: `Error: Invalid color '${String(raw.color)}' (expected #rrggbb)`,
+      };
+    }
+    color = raw.color;
+  }
+
+  let comment: string | undefined;
+  if (typeof raw.comment === "string" && raw.comment.length > 0) {
+    comment = raw.comment;
+  }
+
+  return {
+    ok: true,
+    params: { key, page, rects, pageHeight, text, libraryID, color, comment },
+  };
 }
 
 // Convert one raw recogniser page array into a clean RecognizerPage. The raw
@@ -246,15 +383,32 @@ export function buildHighlightZone(
 ): HighlightMatchResult {
   const tokens = tokenize(query);
   if (tokens.length === 0) {
-    return { ok: false, error: "Error: empty highlight text" };
+    return {
+      ok: false,
+      code: "empty_text",
+      message: "Error: empty highlight text",
+    };
   }
   const startAnchor = tokens.slice(0, Math.min(ANCHOR, tokens.length));
   const endAnchor = tokens.slice(Math.max(0, tokens.length - ANCHOR));
 
   const flatA = flatten(startPage);
+  // No words at all → the page has no text layer to anchor on (scanned PDF).
+  if (flatA.length === 0) {
+    return {
+      ok: false,
+      code: "no_text_layer",
+      message:
+        "Error: the page has no extractable text (scanned/image-only PDF)",
+    };
+  }
   const startIdx = findAnchor(flatA, startAnchor, 0);
   if (startIdx < 0) {
-    return { ok: false, error: "Error: start of span not found on the page" };
+    return {
+      ok: false,
+      code: "span_not_found",
+      message: "Error: start of span not found on the page",
+    };
   }
 
   // End anchor on the same page, at or after the start anchor.
@@ -297,5 +451,34 @@ export function buildHighlightZone(
     }
   }
 
-  return { ok: false, error: "Error: end of span not found on the page" };
+  return {
+    ok: false,
+    code: "span_not_found",
+    message: "Error: end of span not found on the page",
+  };
+}
+
+// The highlight geometry for position (rects-input) mode: map the 1-based page
+// to a 0-based pageIndex, flip the consumer's TOP-LEFT rects to PDF bottom-left
+// via pageHeight (yMin = pageHeight - yBot, yMax = pageHeight - yTop), and keep
+// the topmost top-origin y for the sortIndex. No recogniser, so any page works.
+export type RectsZone = {
+  pageIndex: number;
+  rects: number[][];
+  sortTop: number;
+};
+
+export function buildRectsZone(
+  page: number,
+  rects: number[][],
+  pageHeight: number,
+): RectsZone {
+  const flipped = rects.map(([x1, yTop, x2, yBot]) => [
+    x1,
+    pageHeight - yBot,
+    x2,
+    pageHeight - yTop,
+  ]);
+  const sortTop = Math.min(...rects.map((r) => r[1]));
+  return { pageIndex: page - 1, rects: flipped, sortTop };
 }

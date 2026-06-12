@@ -1,6 +1,8 @@
 import { assert } from "chai";
 import {
   parseAddHighlightParams,
+  parseAddHighlightRectsParams,
+  buildRectsZone,
   extractRecognizerPage,
   buildHighlightZone,
   type RecognizerPage,
@@ -174,13 +176,16 @@ describe("highlight (pure core)", function () {
       }
     });
 
-    it("fails when the start anchor is not found", function () {
+    it("fails with span_not_found when the start anchor is absent (page has text)", function () {
       const r = buildHighlightZone(2, pageA, null, "zzz yyy xxx");
       assert.isFalse(r.ok);
-      if (!r.ok) assert.match(r.error, /start|not found/i);
+      if (!r.ok) {
+        assert.strictEqual(r.code, "span_not_found");
+        assert.isString(r.message);
+      }
     });
 
-    it("fails when the end anchor is not found", function () {
+    it("fails with span_not_found when the end anchor is absent", function () {
       const r = buildHighlightZone(
         2,
         pageA,
@@ -188,7 +193,18 @@ describe("highlight (pure core)", function () {
         "the quick brown fox endnotfound zzz qqq www",
       );
       assert.isFalse(r.ok);
-      if (!r.ok) assert.match(r.error, /end|not found/i);
+      if (!r.ok) assert.strictEqual(r.code, "span_not_found");
+    });
+
+    it("fails with no_text_layer when the page has no extractable words", function () {
+      const emptyPage: RecognizerPage = {
+        pageWidth: 100,
+        pageHeight: 100,
+        lines: [],
+      };
+      const r = buildHighlightZone(2, emptyPage, null, "the quick brown fox");
+      assert.isFalse(r.ok);
+      if (!r.ok) assert.strictEqual(r.code, "no_text_layer");
     });
   });
 
@@ -306,6 +322,110 @@ describe("highlight (pure core)", function () {
       });
       assert.isFalse(r.ok);
       if (!r.ok) assert.match(r.error, /librar/i);
+    });
+  });
+
+  // Position (rects-input) mode: the consumer computes per-quote rects with its
+  // own PDF tooling (e.g. PyMuPDF search_for, TOP-LEFT origin) and posts them,
+  // so highlighting works on ANY page — the 5-page recogniser is bypassed. The
+  // core flips top-left rects to PDF bottom-left via pageHeight and derives the
+  // sortIndex top from the top-origin y.
+  describe("buildRectsZone (position mode)", function () {
+    it("flips one top-left rect to PDF bottom-left and maps page→pageIndex", function () {
+      // page 8 (1-based) → pageIndex 7; pageHeight 800
+      // top-left [100,120,300,140] (yTop=120, yBot=140)
+      // → bottom-left [100, 800-140, 300, 800-120] = [100,660,300,680]
+      const z = buildRectsZone(8, [[100, 120, 300, 140]], 800);
+      assert.strictEqual(z.pageIndex, 7);
+      assert.deepStrictEqual(z.rects, [[100, 660, 300, 680]]);
+      assert.strictEqual(z.sortTop, 120);
+    });
+
+    it("flips multiple rects (multi-line quote) and keeps the topmost sortTop", function () {
+      const z = buildRectsZone(
+        1,
+        [
+          [10, 20, 90, 30],
+          [10, 32, 50, 42],
+        ],
+        100,
+      );
+      assert.strictEqual(z.pageIndex, 0);
+      assert.deepStrictEqual(z.rects, [
+        [10, 70, 90, 80],
+        [10, 58, 50, 68],
+      ]);
+      assert.strictEqual(z.sortTop, 20);
+    });
+  });
+
+  describe("parseAddHighlightRectsParams", function () {
+    const valid = {
+      key: "ABCD2345",
+      page: 8,
+      rects: [[100, 120, 300, 140]],
+      pageHeight: 800,
+      text: "a quoted span",
+      comment: "[@smith2020, p.8]",
+    };
+
+    it("parses a valid rects body", function () {
+      const r = parseAddHighlightRectsParams(valid);
+      assert.isTrue(r.ok, JSON.stringify(r));
+      if (r.ok) {
+        assert.strictEqual(r.params.page, 8);
+        assert.deepStrictEqual(r.params.rects, [[100, 120, 300, 140]]);
+        assert.strictEqual(r.params.pageHeight, 800);
+        assert.strictEqual(r.params.text, "a quoted span");
+        assert.strictEqual(r.params.comment, "[@smith2020, p.8]");
+      }
+    });
+
+    it("rejects a missing key", function () {
+      const r = parseAddHighlightRectsParams({ ...valid, key: undefined });
+      assert.isFalse(r.ok);
+      if (!r.ok) assert.match(r.error, /key/i);
+    });
+
+    it("rejects a sub-1 page", function () {
+      assert.isFalse(parseAddHighlightRectsParams({ ...valid, page: 0 }).ok);
+    });
+
+    it("rejects missing or empty rects", function () {
+      assert.isFalse(parseAddHighlightRectsParams({ ...valid, rects: [] }).ok);
+      const r = parseAddHighlightRectsParams({ ...valid, rects: undefined });
+      assert.isFalse(r.ok);
+      if (!r.ok) assert.match(r.error, /rect/i);
+    });
+
+    it("rejects a rect that is not four finite numbers", function () {
+      assert.isFalse(
+        parseAddHighlightRectsParams({ ...valid, rects: [[1, 2, 3]] }).ok,
+      );
+      assert.isFalse(
+        parseAddHighlightRectsParams({
+          ...valid,
+          rects: [[1, 2, 3, "x"]],
+        }).ok,
+      );
+    });
+
+    it("rejects a missing or non-positive pageHeight", function () {
+      const r = parseAddHighlightRectsParams({
+        ...valid,
+        pageHeight: undefined,
+      });
+      assert.isFalse(r.ok);
+      if (!r.ok) assert.match(r.error, /height/i);
+      assert.isFalse(
+        parseAddHighlightRectsParams({ ...valid, pageHeight: 0 }).ok,
+      );
+    });
+
+    it("rejects an invalid color", function () {
+      assert.isFalse(
+        parseAddHighlightRectsParams({ ...valid, color: "blue" }).ok,
+      );
     });
   });
 });
