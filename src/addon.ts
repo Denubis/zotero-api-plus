@@ -21,6 +21,11 @@ import {
   buildAnnotationSortIndex,
   buildNotePosition,
 } from "./utils/notes";
+import {
+  parseAddHighlightParams,
+  extractRecognizerPage,
+  buildHighlightZone,
+} from "./utils/highlight";
 
 // add-item-by-id 响应中每个新增项目的形状。
 type ItemResult = {
@@ -684,6 +689,118 @@ Zotero.Server.LocalAPI.ReadNoteEndpoint = class extends (
   }
 };
 
+// Add-Highlight 端点 - 在 PDF 上按文本跨度创建 highlight 标注。POST/JSON：
+// { key, page(跨度起始页), text(要查找并高亮的引文), libraryID?, color?, comment? }。
+// 用 Zotero.PDFWorker.getRecognizerData 取得逐词包围盒（自带 50 页上限），按
+// 首/尾锚点定位“起止区域”，逐行生成矩形并把识别器的左上原点 y 翻转回 PDF 左下
+// 原点（pageHeight - y）。跨一个分页时用 position.nextPageRects（P → P+1）。
+Zotero.Server.LocalAPI.AddHighlightEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["POST"];
+  supportedDataTypes = ["application/json"];
+
+  async run(req: {
+    data?: Record<string, unknown>;
+  }): Promise<[number, string, string]> {
+    try {
+      const parsed = parseAddHighlightParams(req.data ?? {});
+      if (!parsed.ok) {
+        return [400, "text/plain", parsed.error];
+      }
+      const { key, page, text, libraryID, color, comment } = parsed.params;
+
+      const resolved = await resolveItemByKey(key, libraryID);
+      if ("error" in resolved) return resolved.error;
+      const attachment = resolvePdfAttachment(resolved.item);
+      if (!attachment) {
+        return [404, "text/plain", `Error: No PDF attachment for key ${key}`];
+      }
+
+      // 取识别器数据（解析整份 PDF；逐词包围盒；最多前 50 页）。
+      let recognizer: any;
+      try {
+        recognizer = await Zotero.PDFWorker.getRecognizerData(attachment.id);
+      } catch (e: any) {
+        Zotero.logError(e);
+        return [
+          500,
+          "text/plain",
+          "Internal Server Error: could not read PDF text layout: " + e.message,
+        ];
+      }
+      const pages = recognizer?.pages;
+      if (!Array.isArray(pages)) {
+        return [
+          500,
+          "text/plain",
+          "Internal Server Error: unexpected recognizer output",
+        ];
+      }
+
+      const pageIndex = pageToPageIndex(page);
+      if (pageIndex < 0 || pageIndex >= pages.length) {
+        return [
+          400,
+          "text/plain",
+          `Error: page ${page} is beyond the recognizer's range (${pages.length} page(s); note its 50-page cap)`,
+        ];
+      }
+
+      const startPage = extractRecognizerPage(pages[pageIndex]);
+      const nextPage =
+        pageIndex + 1 < pages.length
+          ? extractRecognizerPage(pages[pageIndex + 1])
+          : null;
+
+      const match = buildHighlightZone(pageIndex, startPage, nextPage, text);
+      if (!match.ok) {
+        return [404, "text/plain", match.error];
+      }
+      const zone = match.zone;
+
+      const position: _ZoteroTypes.Annotations.AnnotationJson["position"] = {
+        pageIndex,
+        rects: zone.rects,
+      };
+      if (zone.nextPageRects) {
+        position.nextPageRects = zone.nextPageRects;
+      }
+
+      const json: _ZoteroTypes.Annotations.AnnotationJson = {
+        id: "",
+        key: Zotero.Utilities.generateObjectKey(),
+        libraryID: attachment.libraryID,
+        type: "highlight",
+        text: zone.matched,
+        comment: comment ?? "",
+        color: color ?? Zotero.Annotations.DEFAULT_COLOR,
+        pageLabel: String(page),
+        sortIndex: buildAnnotationSortIndex(pageIndex, 0, zone.sortTop),
+        position,
+        readOnly: false,
+        dateModified: "",
+      };
+      const created = await Zotero.Annotations.saveFromJSON(attachment, json);
+
+      return [
+        200,
+        "application/json",
+        JSON.stringify({
+          ok: true,
+          key: created.key,
+          page,
+          matched: zone.matched,
+          rects: zone.rects,
+          ...(zone.nextPageRects ? { nextPageRects: zone.nextPageRects } : {}),
+        }),
+      ];
+    } catch (e: any) {
+      return [500, "text/plain", "Internal Server Error: " + e.message];
+    }
+  }
+};
+
 // 插件主类 - 管理插件的生命周期和数据
 class Addon {
   public data: {
@@ -737,6 +854,8 @@ class Addon {
       Zotero.Server.LocalAPI.AddNoteEndpoint;
     Zotero.Server.Endpoints["/api/plus/read-note"] =
       Zotero.Server.LocalAPI.ReadNoteEndpoint;
+    Zotero.Server.Endpoints["/api/plus/add-highlight"] =
+      Zotero.Server.LocalAPI.AddHighlightEndpoint;
     ztoolkit.log("Registering Local API Plus endpoint");
     ztoolkit.log(Zotero.Server.LocalAPI.Plus);
   }
