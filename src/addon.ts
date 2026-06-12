@@ -23,9 +23,15 @@ import {
 } from "./utils/notes";
 import {
   parseAddHighlightParams,
+  parseAddHighlightRectsParams,
   extractRecognizerPage,
   buildHighlightZone,
+  buildRectsZone,
 } from "./utils/highlight";
+import {
+  parseReadAnnotationsParams,
+  parseDeleteAnnotationParams,
+} from "./utils/annotations";
 
 // add-item-by-id 响应中每个新增项目的形状。
 type ItemResult = {
@@ -117,6 +123,36 @@ function noteAnnotationToJSON(annotation: Zotero.Item): {
     comment: annotation.annotationComment,
     color: annotation.annotationColor,
     type: annotation.annotationType,
+  };
+}
+
+// The read-annotations JSON shape for one annotation of ANY type. Unlike
+// noteAnnotationToJSON it also carries `text` (annotationText — the highlighted
+// span for highlights, empty for notes), which batch-mode dedup keys on.
+function annotationToJSON(annotation: Zotero.Item): {
+  key: string;
+  type: string;
+  page: number | null;
+  pageLabel: string;
+  comment: string;
+  color: string;
+  text: string;
+} {
+  let pageIndex: number | null = null;
+  try {
+    const pos = JSON.parse(annotation.annotationPosition);
+    if (typeof pos?.pageIndex === "number") pageIndex = pos.pageIndex;
+  } catch (e: any) {
+    Zotero.logError(e);
+  }
+  return {
+    key: annotation.key,
+    type: annotation.annotationType,
+    page: pageIndex === null ? null : pageIndex + 1,
+    pageLabel: annotation.annotationPageLabel,
+    comment: annotation.annotationComment,
+    color: annotation.annotationColor,
+    text: annotation.annotationText ?? "",
   };
 }
 
@@ -689,11 +725,284 @@ Zotero.Server.LocalAPI.ReadNoteEndpoint = class extends (
   }
 };
 
-// Add-Highlight 端点 - 在 PDF 上按文本跨度创建 highlight 标注。POST/JSON：
-// { key, page(跨度起始页), text(要查找并高亮的引文), libraryID?, color?, comment? }。
-// 用 Zotero.PDFWorker.getRecognizerData 取得逐词包围盒（自带 50 页上限），按
-// 首/尾锚点定位“起止区域”，逐行生成矩形并把识别器的左上原点 y 翻转回 PDF 左下
-// 原点（pageHeight - y）。跨一个分页时用 position.nextPageRects（P → P+1）。
+// Read-Annotations 端点 - 通用读取，可返回 highlight（read-note 只返回 note）。
+// GET ?key=&type=note|highlight|all（默认 all）&libraryID=。注释 key → 单条；
+// 父条目/PDF key → 该 PDF 上按 type 过滤的标注列表。每条含 text（annotationText，
+// highlight 的高亮文本；note 为空），供批量模式按 comment 标记去重。
+Zotero.Server.LocalAPI.ReadAnnotationsEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["GET"];
+
+  async run(req: {
+    searchParams?: URLSearchParams;
+  }): Promise<[number, string, string]> {
+    try {
+      const sp = req.searchParams;
+      const parsed = parseReadAnnotationsParams({
+        key: sp?.get("key") ?? null,
+        type: sp?.get("type") ?? null,
+        libraryID: sp?.get("libraryID") ?? null,
+      });
+      if (!parsed.ok) {
+        return [400, "text/plain", parsed.error];
+      }
+      const { key, type, libraryID } = parsed.params;
+
+      const resolved = await resolveItemByKey(key, libraryID);
+      if ("error" in resolved) return resolved.error;
+      const item = resolved.item;
+
+      // 单条：key 指向一个标注。type 过滤（非 all）时校验类型。
+      if (item.isAnnotation()) {
+        if (type !== "all" && item.annotationType !== type) {
+          return [
+            400,
+            "text/plain",
+            `Error: ${key} is a ${item.annotationType} annotation, not ${type}`,
+          ];
+        }
+        return [
+          200,
+          "application/json",
+          JSON.stringify({ ok: true, ...annotationToJSON(item) }),
+        ];
+      }
+
+      // 列表：父条目或 PDF 附件 → 汇总其 PDF 附件上按 type 过滤的标注。
+      const attachments: Zotero.Item[] = [];
+      if (item.isPDFAttachment()) {
+        attachments.push(item);
+      } else if (item.isRegularItem()) {
+        for (const id of item.getAttachments()) {
+          const child = Zotero.Items.get(id);
+          if (child && child.isPDFAttachment()) attachments.push(child);
+        }
+      }
+
+      const annotations: ReturnType<typeof annotationToJSON>[] = [];
+      for (const att of attachments) {
+        for (const ann of att.getAnnotations()) {
+          if (type === "all" || ann.annotationType === type) {
+            annotations.push(annotationToJSON(ann));
+          }
+        }
+      }
+      return [
+        200,
+        "application/json",
+        JSON.stringify({ ok: true, annotations }),
+      ];
+    } catch (e: any) {
+      return [500, "text/plain", "Internal Server Error: " + e.message];
+    }
+  }
+};
+
+// add-highlight 的结构化错误：{ok:false, code, message}，HTTP 状态由 code 决定。
+// 消费方按 code 分支其“放置失败 → 改放页锚 note”的回退（与 page_beyond_cap /
+// no_text_layer / span_not_found 同等处理）。注意：条目/库解析失败（未知 key/库、
+// 非 PDF）仍由 resolveItemByKey 以 text/plain 404/400 返回，不带 code。
+const HIGHLIGHT_ERROR_STATUS: Record<string, number> = {
+  bad_request: 400,
+  no_pdf_attachment: 404,
+  empty_text: 400,
+  span_not_found: 422,
+  no_text_layer: 422,
+  page_beyond_cap: 422,
+  page_beyond_document: 400,
+  internal: 500,
+};
+
+function highlightError(
+  code: string,
+  message: string,
+): [number, string, string] {
+  const status = HIGHLIGHT_ERROR_STATUS[code] ?? 400;
+  return [
+    status,
+    "application/json",
+    JSON.stringify({ ok: false, code, message }),
+  ];
+}
+
+// 共享保存：构造 highlight 标注 JSON（左下原点 rects）并落库，返回新建标注。
+async function saveHighlightAnnotation(
+  attachment: Zotero.Item,
+  opts: {
+    page: number;
+    pageIndex: number;
+    sortTop: number;
+    rects: number[][];
+    nextPageRects?: number[][];
+    text: string;
+    comment?: string;
+    color?: string;
+  },
+): Promise<Zotero.Item> {
+  const position: _ZoteroTypes.Annotations.AnnotationJson["position"] = {
+    pageIndex: opts.pageIndex,
+    rects: opts.rects,
+  };
+  if (opts.nextPageRects) {
+    position.nextPageRects = opts.nextPageRects;
+  }
+  const json: _ZoteroTypes.Annotations.AnnotationJson = {
+    id: "",
+    key: Zotero.Utilities.generateObjectKey(),
+    libraryID: attachment.libraryID,
+    type: "highlight",
+    text: opts.text,
+    comment: opts.comment ?? "",
+    color: opts.color ?? Zotero.Annotations.DEFAULT_COLOR,
+    pageLabel: String(opts.page),
+    sortIndex: buildAnnotationSortIndex(opts.pageIndex, 0, opts.sortTop),
+    position,
+    readOnly: false,
+    dateModified: "",
+  };
+  return Zotero.Annotations.saveFromJSON(attachment, json);
+}
+
+// 文本模式：用 getRecognizerData 的逐词包围盒（仅前 5 页）按首/尾锚点定位跨度，
+// 逐行生成矩形并把识别器的左上原点 y 翻回 PDF 左下；跨一个分页用 nextPageRects。
+async function runAddHighlightText(
+  data: Record<string, unknown>,
+): Promise<[number, string, string]> {
+  const parsed = parseAddHighlightParams(data);
+  if (!parsed.ok) {
+    return highlightError("bad_request", parsed.error);
+  }
+  const { key, page, text, libraryID, color, comment } = parsed.params;
+
+  const resolved = await resolveItemByKey(key, libraryID);
+  if ("error" in resolved) return resolved.error;
+  const attachment = resolvePdfAttachment(resolved.item);
+  if (!attachment) {
+    return highlightError(
+      "no_pdf_attachment",
+      `Error: No PDF attachment for key ${key}`,
+    );
+  }
+
+  // 识别器只解析前 5 页（maxPages=5，硬编码在 pdf-worker 内，插件无法放宽）。
+  let recognizer: any;
+  try {
+    recognizer = await Zotero.PDFWorker.getRecognizerData(attachment.id);
+  } catch (e: any) {
+    Zotero.logError(e);
+    return highlightError(
+      "internal",
+      "could not read PDF text layout: " + e.message,
+    );
+  }
+  const pages = recognizer?.pages;
+  if (!Array.isArray(pages)) {
+    return highlightError("internal", "unexpected recognizer output");
+  }
+
+  const pageIndex = pageToPageIndex(page);
+  if (pageIndex < 0 || pageIndex >= pages.length) {
+    return highlightError(
+      "page_beyond_cap",
+      `Error: page ${page} is beyond the recognizer's reach (it reads only the first ${pages.length} page(s); the recognizer caps at 5 — use rects/position mode for later pages)`,
+    );
+  }
+
+  const startPage = extractRecognizerPage(pages[pageIndex]);
+  const nextPage =
+    pageIndex + 1 < pages.length
+      ? extractRecognizerPage(pages[pageIndex + 1])
+      : null;
+
+  const match = buildHighlightZone(pageIndex, startPage, nextPage, text);
+  if (!match.ok) {
+    return highlightError(match.code, match.message);
+  }
+  const zone = match.zone;
+
+  const created = await saveHighlightAnnotation(attachment, {
+    page,
+    pageIndex,
+    sortTop: zone.sortTop,
+    rects: zone.rects,
+    nextPageRects: zone.nextPageRects,
+    text: zone.matched,
+    comment,
+    color,
+  });
+
+  return [
+    200,
+    "application/json",
+    JSON.stringify({
+      ok: true,
+      key: created.key,
+      page,
+      matched: zone.matched,
+      rects: zone.rects,
+      ...(zone.nextPageRects ? { nextPageRects: zone.nextPageRects } : {}),
+    }),
+  ];
+}
+
+// 位置模式：消费方用自有 PDF 工具（如 PyMuPDF）算好逐行矩形（左上原点）+ 页高，
+// 绕开识别器 5 页上限，任意页可高亮。页码用 getFullText 的真实 totalPages 校验。
+async function runAddHighlightRects(
+  data: Record<string, unknown>,
+): Promise<[number, string, string]> {
+  const parsed = parseAddHighlightRectsParams(data);
+  if (!parsed.ok) {
+    return highlightError("bad_request", parsed.error);
+  }
+  const { key, page, rects, pageHeight, text, libraryID, color, comment } =
+    parsed.params;
+
+  const resolved = await resolveItemByKey(key, libraryID);
+  if ("error" in resolved) return resolved.error;
+  const attachment = resolvePdfAttachment(resolved.item);
+  if (!attachment) {
+    return highlightError(
+      "no_pdf_attachment",
+      `Error: No PDF attachment for key ${key}`,
+    );
+  }
+
+  let totalPages: number | null = null;
+  try {
+    const fullText = await Zotero.PDFWorker.getFullText(attachment.id, 1);
+    totalPages =
+      typeof fullText?.totalPages === "number" ? fullText.totalPages : null;
+  } catch (e: any) {
+    Zotero.logError(e);
+  }
+  if (totalPages !== null && !isPageInRange(page, totalPages)) {
+    return highlightError(
+      "page_beyond_document",
+      `Error: page ${page} is beyond the PDF (it has ${totalPages} page(s))`,
+    );
+  }
+
+  const zone = buildRectsZone(page, rects, pageHeight);
+
+  const created = await saveHighlightAnnotation(attachment, {
+    page,
+    pageIndex: zone.pageIndex,
+    sortTop: zone.sortTop,
+    rects: zone.rects,
+    text: text ?? "",
+    comment,
+    color,
+  });
+
+  return [
+    200,
+    "application/json",
+    JSON.stringify({ ok: true, key: created.key, page, rects: zone.rects }),
+  ];
+}
+
+// Add-Highlight 端点 - 两种模式（请求体含 rects → 位置模式，否则文本模式）。
 Zotero.Server.LocalAPI.AddHighlightEndpoint = class extends (
   Zotero.Server.LocalAPI.Schema
 ) {
@@ -704,97 +1013,49 @@ Zotero.Server.LocalAPI.AddHighlightEndpoint = class extends (
     data?: Record<string, unknown>;
   }): Promise<[number, string, string]> {
     try {
-      const parsed = parseAddHighlightParams(req.data ?? {});
+      const data = req.data ?? {};
+      return "rects" in data
+        ? await runAddHighlightRects(data)
+        : await runAddHighlightText(data);
+    } catch (e: any) {
+      return highlightError("internal", e.message);
+    }
+  }
+};
+
+// Delete-Annotation 端点 - 删除一个标注。POST/JSON { key, libraryID? }。
+// 解析 key → 必须是标注（否则 400），用 eraseTx() 删除。供测试清理与“改写即先删”。
+Zotero.Server.LocalAPI.DeleteAnnotationEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["POST"];
+  supportedDataTypes = ["application/json"];
+
+  async run(req: {
+    data?: Record<string, unknown>;
+  }): Promise<[number, string, string]> {
+    try {
+      const parsed = parseDeleteAnnotationParams(req.data ?? {});
       if (!parsed.ok) {
         return [400, "text/plain", parsed.error];
       }
-      const { key, page, text, libraryID, color, comment } = parsed.params;
+      const { key, libraryID } = parsed.params;
 
       const resolved = await resolveItemByKey(key, libraryID);
       if ("error" in resolved) return resolved.error;
-      const attachment = resolvePdfAttachment(resolved.item);
-      if (!attachment) {
-        return [404, "text/plain", `Error: No PDF attachment for key ${key}`];
-      }
+      const item = resolved.item;
 
-      // 取识别器数据（解析整份 PDF；逐词包围盒；最多前 50 页）。
-      let recognizer: any;
-      try {
-        recognizer = await Zotero.PDFWorker.getRecognizerData(attachment.id);
-      } catch (e: any) {
-        Zotero.logError(e);
-        return [
-          500,
-          "text/plain",
-          "Internal Server Error: could not read PDF text layout: " + e.message,
-        ];
-      }
-      const pages = recognizer?.pages;
-      if (!Array.isArray(pages)) {
-        return [
-          500,
-          "text/plain",
-          "Internal Server Error: unexpected recognizer output",
-        ];
-      }
-
-      const pageIndex = pageToPageIndex(page);
-      if (pageIndex < 0 || pageIndex >= pages.length) {
+      if (!item.isAnnotation()) {
         return [
           400,
           "text/plain",
-          `Error: page ${page} is beyond the recognizer's range (${pages.length} page(s); note its 50-page cap)`,
+          `Error: ${key} is not an annotation (its item type is ${item.itemType})`,
         ];
       }
 
-      const startPage = extractRecognizerPage(pages[pageIndex]);
-      const nextPage =
-        pageIndex + 1 < pages.length
-          ? extractRecognizerPage(pages[pageIndex + 1])
-          : null;
+      await item.eraseTx();
 
-      const match = buildHighlightZone(pageIndex, startPage, nextPage, text);
-      if (!match.ok) {
-        return [404, "text/plain", match.error];
-      }
-      const zone = match.zone;
-
-      const position: _ZoteroTypes.Annotations.AnnotationJson["position"] = {
-        pageIndex,
-        rects: zone.rects,
-      };
-      if (zone.nextPageRects) {
-        position.nextPageRects = zone.nextPageRects;
-      }
-
-      const json: _ZoteroTypes.Annotations.AnnotationJson = {
-        id: "",
-        key: Zotero.Utilities.generateObjectKey(),
-        libraryID: attachment.libraryID,
-        type: "highlight",
-        text: zone.matched,
-        comment: comment ?? "",
-        color: color ?? Zotero.Annotations.DEFAULT_COLOR,
-        pageLabel: String(page),
-        sortIndex: buildAnnotationSortIndex(pageIndex, 0, zone.sortTop),
-        position,
-        readOnly: false,
-        dateModified: "",
-      };
-      const created = await Zotero.Annotations.saveFromJSON(attachment, json);
-
-      return [
-        200,
-        "application/json",
-        JSON.stringify({
-          ok: true,
-          key: created.key,
-          page,
-          matched: zone.matched,
-          rects: zone.rects,
-          ...(zone.nextPageRects ? { nextPageRects: zone.nextPageRects } : {}),
-        }),
-      ];
+      return [200, "application/json", JSON.stringify({ ok: true, key })];
     } catch (e: any) {
       return [500, "text/plain", "Internal Server Error: " + e.message];
     }
@@ -854,8 +1115,12 @@ class Addon {
       Zotero.Server.LocalAPI.AddNoteEndpoint;
     Zotero.Server.Endpoints["/api/plus/read-note"] =
       Zotero.Server.LocalAPI.ReadNoteEndpoint;
+    Zotero.Server.Endpoints["/api/plus/read-annotations"] =
+      Zotero.Server.LocalAPI.ReadAnnotationsEndpoint;
     Zotero.Server.Endpoints["/api/plus/add-highlight"] =
       Zotero.Server.LocalAPI.AddHighlightEndpoint;
+    Zotero.Server.Endpoints["/api/plus/delete-annotation"] =
+      Zotero.Server.LocalAPI.DeleteAnnotationEndpoint;
     ztoolkit.log("Registering Local API Plus endpoint");
     ztoolkit.log(Zotero.Server.LocalAPI.Plus);
   }

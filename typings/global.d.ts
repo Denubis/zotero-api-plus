@@ -34,7 +34,9 @@ declare namespace Zotero {
       let OpenPdfEndpoint: new () => Schema;
       let AddNoteEndpoint: new () => Schema;
       let ReadNoteEndpoint: new () => Schema;
+      let ReadAnnotationsEndpoint: new () => Schema;
       let AddHighlightEndpoint: new () => Schema;
+      let DeleteAnnotationEndpoint: new () => Schema;
     }
     const Endpoints: {
       [key: string]: any;
