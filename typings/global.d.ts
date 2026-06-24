@@ -37,9 +37,29 @@ declare namespace Zotero {
       let ReadAnnotationsEndpoint: new () => Schema;
       let AddHighlightEndpoint: new () => Schema;
       let DeleteAnnotationEndpoint: new () => Schema;
+      let RunAutoExportEndpoint: new () => Schema;
     }
     const Endpoints: {
       [key: string]: any;
     };
   }
+
+  // Better BibTeX's exposed singleton, present only when BBT is installed (so the
+  // run-autoexport endpoint probes `Zotero.BetterBibTeX != null` first). This is
+  // BBT's INTERNAL API, pinned to BBT 9.0.31 — re-confirm get/all/run and the
+  // entry shape against the installed BBT after any BBT upgrade. The entry type
+  // is the single source of truth in src/utils/run-autoexport.ts.
+  interface BetterBibTeXAutoExport {
+    get(
+      path: string,
+    ): import("../src/utils/run-autoexport").AutoExportEntry | undefined;
+    all(): import("../src/utils/run-autoexport").AutoExportEntry[];
+    run(path: string): void;
+  }
+  interface BetterBibTeXAPI {
+    // true while BBT is mid-startup (a getter over Ready.pending in BBT).
+    starting: boolean;
+    AutoExport: BetterBibTeXAutoExport;
+  }
+  let BetterBibTeX: BetterBibTeXAPI | undefined;
 }

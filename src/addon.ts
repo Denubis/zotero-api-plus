@@ -32,6 +32,10 @@ import {
   parseReadAnnotationsParams,
   parseDeleteAnnotationParams,
 } from "./utils/annotations";
+import {
+  parseRunAutoExportParams,
+  decideRunAutoExport,
+} from "./utils/run-autoexport";
 
 // add-item-by-id 响应中每个新增项目的形状。
 type ItemResult = {
@@ -1062,6 +1066,56 @@ Zotero.Server.LocalAPI.DeleteAnnotationEndpoint = class extends (
   }
 };
 
+// Run-AutoExport 端点 - 强制触发 Better BibTeX 已注册的 "Keep updated" 自动导出。
+// POST/JSON { path }，path 为用户在 "Export Collection → Keep updated" 中设定的
+// 输出文件绝对路径。本端点只"触发"不"判定"：它调用 BBT 自己的导出器后立即返回
+// triggered，不声称导出成功——BBT 会吞掉导出失败（status 恒为 done、error 恒为
+// ""），因此成功与否由调用方对写入的 bib 文件做地面真值校验（citekey 在不在 +
+// 磁盘上的 render）。验证顺序固定：缺 path→400（与 BBT 状态无关，使无 path 探针
+// 稳定）、BBT 未装→503 bbt-unavailable、BBT 启动中→503 bbt-starting、该 path 无
+// 注册自动导出→404 no-autoexport（列出已注册路径）、否则触发→200 triggered。
+// 纯逻辑（解析、路径匹配、验证顺序分支、响应成形）在 src/utils/run-autoexport.ts。
+Zotero.Server.LocalAPI.RunAutoExportEndpoint = class extends (
+  Zotero.Server.LocalAPI.Schema
+) {
+  supportedMethods = ["POST"];
+  supportedDataTypes = ["application/json"];
+
+  async run(req: {
+    data?: Record<string, unknown>;
+  }): Promise<[number, string, string]> {
+    try {
+      const parse = parseRunAutoExportParams(req.data ?? {});
+
+      // 按依赖顺序收集观测值：path 缺失或 BBT 未就绪时绝不触碰注册表。
+      // bbtPresent 是安装探针（对象是否存在）；autoExport 仅在 BBT 存在且未处于
+      // 启动中时取到，故 AutoExport 不可用或 starting 都落到 bbt-starting。
+      const bbt = Zotero.BetterBibTeX;
+      const bbtPresent = bbt != null;
+      const autoExport = bbt && !bbt.starting ? bbt.AutoExport : undefined;
+      const bbtReady = autoExport !== undefined;
+      const entries = parse.ok && autoExport ? autoExport.all() : [];
+
+      const decision = decideRunAutoExport({
+        parse,
+        bbtPresent,
+        bbtReady,
+        entries,
+      });
+
+      // 触发 BBT 自己的注册导出器并立即返回；其余（git pull/push、recursive 多
+      // 文件写出）在后台进行，调用方等待的是产物而非本响应。autoExport 守卫既满足
+      // 类型收窄，也与逻辑一致：decision.fire 仅在 bbtReady 分支被置位。
+      if (decision.fire && autoExport) {
+        autoExport.run(decision.fire);
+      }
+      return decision.response;
+    } catch (e: any) {
+      return [500, "text/plain", "Internal Server Error: " + e.message];
+    }
+  }
+};
+
 // 插件主类 - 管理插件的生命周期和数据
 class Addon {
   public data: {
@@ -1121,6 +1175,8 @@ class Addon {
       Zotero.Server.LocalAPI.AddHighlightEndpoint;
     Zotero.Server.Endpoints["/api/plus/delete-annotation"] =
       Zotero.Server.LocalAPI.DeleteAnnotationEndpoint;
+    Zotero.Server.Endpoints["/api/plus/run-autoexport"] =
+      Zotero.Server.LocalAPI.RunAutoExportEndpoint;
     ztoolkit.log("Registering Local API Plus endpoint");
     ztoolkit.log(Zotero.Server.LocalAPI.Plus);
   }
