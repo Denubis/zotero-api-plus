@@ -59,7 +59,9 @@ declare namespace Zotero {
   interface BetterBibTeXAPI {
     // true while BBT is mid-startup (a getter over Ready.pending in BBT).
     starting: boolean;
-    AutoExport: BetterBibTeXAutoExport;
+    // Optional: not yet assigned while BBT is starting, so callers must guard it
+    // (the run-autoexport shell does: `bbt && !bbt.starting ? bbt.AutoExport : …`).
+    AutoExport?: BetterBibTeXAutoExport;
   }
   let BetterBibTeX: BetterBibTeXAPI | undefined;
 }

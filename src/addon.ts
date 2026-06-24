@@ -1094,6 +1094,9 @@ Zotero.Server.LocalAPI.RunAutoExportEndpoint = class extends (
       const bbtPresent = bbt != null;
       const autoExport = bbt && !bbt.starting ? bbt.AutoExport : undefined;
       const bbtReady = autoExport !== undefined;
+      // Path matching in the pure core is lexical (normalizeExportPath): a
+      // symlinked caller path won't equal the registry's real path, so it falls
+      // to 404 no-autoexport, whose registeredPaths body shows what BBT holds.
       const entries = parse.ok && autoExport ? autoExport.all() : [];
 
       const decision = decideRunAutoExport({

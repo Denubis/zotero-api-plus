@@ -5,8 +5,8 @@ import { assert } from "chai";
 // Zotero.BetterBibTeX is undefined here: a path-less probe returns 400 (the
 // endpoint-present signal) and any path-bearing request returns 503
 // bbt-unavailable. The happy path (a real registered auto-export firing) is
-// verified live against the user's Zotero, since it depends on BBT's internal
-// AutoExport API — see the resume prompt's live-confirmation step.
+// verified manually against a running Zotero that has BBT and a registered
+// auto-export, since it depends on BBT's internal AutoExport API.
 describe("endpoint /api/plus/run-autoexport (no-BBT paths)", function () {
   function run(data: Record<string, unknown>) {
     const ep = new Zotero.Server.LocalAPI.RunAutoExportEndpoint();
