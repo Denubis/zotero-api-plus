@@ -1,7 +1,7 @@
 {
   "name": "zotero-api-plus",
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Extra local-API endpoints for Zotero 9: PDF reader, page notes, text highlights, and group/collection targeting.",
   "config": {
     "addonName": "Zotero 9 API Plus",
